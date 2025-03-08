@@ -1,21 +1,14 @@
 import React from "react";
-import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
-import NavigationBar from "./components/Navbar";
-import Home from "./pages/Home";
-import Verify from "./pages/Verify";
-import 'bootstrap/dist/css/bootstrap.min.css';
+import { Container } from "react-bootstrap";
+import KycStepupForm from "./components/KycStepupForm";
 
-
-const App = () => {
+function App() {
   return (
-    <Router>
-      <NavigationBar />
-      <Routes>
-        <Route path="/" element={<Home />} />
-        <Route path="/verify" element={<Verify />} />
-      </Routes>
-    </Router>
+    <Container>
+      <h1 className="text-center mt-4">Automated KYC System</h1>
+      <KycStepupForm />
+    </Container>
   );
-};
+}
 
 export default App;
