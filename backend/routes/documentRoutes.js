@@ -5,10 +5,13 @@ const { processImage } = require("../controllers/documentController");
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
 
-router.post("/process", upload.fields([{ name: "aadhaarFile" }, { name: "panFile" }]), async (req, res) => {
+router.post("/verify", upload.fields([{ name: "aadhaarFile" }, { name: "panFile" }]), async (req, res) => {
   try {
-    if (!req.files || (!req.files.aadhaarFile && !req.files.panFile)) {
-      return res.status(400).json({ success: false, error: "Files are required." });
+    console.log("Received Form Data:", req.body);
+    console.log("Files Uploaded:", req.files);
+
+    if (!req.body.name || !req.body.aadhaar || !req.body.pan) {
+      return res.status(400).json({ success: false, error: "Missing form data" });
     }
 
     const formData = {
@@ -17,58 +20,51 @@ router.post("/process", upload.fields([{ name: "aadhaarFile" }, { name: "panFile
       pan: req.body.pan.trim(),
     };
 
-    console.log("Received Form Data:", formData);
-
-    let aadhaarDetails = { success: false, details: {} };
-    let panDetails = { success: false, details: {} };
-
-    if (req.files.aadhaarFile) {
-      aadhaarDetails = await processImage(req.files.aadhaarFile[0]);
+    if (!req.files || (!req.files.aadhaarFile && !req.files.panFile)) {
+      return res.status(400).json({ success: false, error: "No files uploaded" });
     }
 
-    if (req.files.panFile) {
-      panDetails = await processImage(req.files.panFile[0]);
-    }
-
-    console.log("Extracted Aadhaar Details:", aadhaarDetails);
-    console.log("Extracted PAN Details:", panDetails);
+    const extractedAadhaar = req.files.aadhaarFile ? await processImage(req.files.aadhaarFile[0]) : null;
+    const extractedPAN = req.files.panFile ? await processImage(req.files.panFile[0]) : null;
 
     let mismatches = [];
+    let aadhaarNameMatch = false;
+    let panNameMatch = false;
 
-    // Aadhaar Validation
-    if (aadhaarDetails.success) {
-      const extractedAadhaarName = aadhaarDetails.details.name.trim().toUpperCase();
-      if (!extractedAadhaarName.includes(formData.name)) {
-        mismatches.push("Name does not match with Aadhaar");
+    if (extractedAadhaar?.success) {
+      if (formData.aadhaar !== extractedAadhaar.details.number) {
+        mismatches.push("Aadhaar number mismatch.");
       }
-      if (formData.aadhaar !== aadhaarDetails.details.number) {
-        mismatches.push(`Aadhaar number mismatch: Extracted=${aadhaarDetails.details.number}, Provided=${formData.aadhaar}`);
+      if (extractedAadhaar.details.name.toUpperCase().includes(formData.name)) {
+        aadhaarNameMatch = true;
       }
     } else {
       mismatches.push("Aadhaar extraction failed.");
     }
 
-    // PAN Validation
-    if (panDetails.success) {
-      const extractedPanName = panDetails.details.name.trim().toUpperCase();
-      if (!extractedPanName.includes(formData.name)) {
-        mismatches.push("Name does not match with PAN");
+    if (extractedPAN?.success) {
+      if (formData.pan !== extractedPAN.details.number) {
+        mismatches.push("PAN number mismatch.");
       }
-      if (formData.pan !== panDetails.details.number) {
-        mismatches.push(`PAN number mismatch: Extracted=${panDetails.details.number}, Provided=${formData.pan}`);
+      if (extractedPAN.details.name.toUpperCase().includes(formData.name)) {
+        panNameMatch = true;
       }
     } else {
       mismatches.push("PAN extraction failed.");
     }
 
-    if (mismatches.length === 0) {
-      return res.json({ success: true, message: "KYC Verified Successfully!" });
-    } else {
-      return res.json({ success: false, error: mismatches.join(", ") });
+    if (!aadhaarNameMatch && !panNameMatch) {
+      mismatches.push("Name does not match with Aadhaar or PAN.");
     }
+
+    if (mismatches.length > 0) {
+      return res.status(400).json({ success: false, error: mismatches });
+    }
+
+    res.json({ success: true, message: "KYC Verified Successfully!" });
   } catch (error) {
-    console.error("Error processing KYC:", error);
-    res.status(500).json({ success: false, error: "Internal server error." });
+    console.error("Server Error:", error);
+    res.status(500).json({ success: false, error: "Internal server error" });
   }
 });
 
