@@ -9,7 +9,7 @@ The KYC (Know Your Customer) application automates identity verification by proc
 ### High-Level Architecture
 
 1. **Frontend** - User interface for document upload and status tracking (React).
-2. **Backend** - Handles API requests, processes OCR and ML tasks (Node.js/Python).
+2. **Backend** - Handles API requests, processes OCR and ML tasks (Node.js).
 3. **OCR & ML Services** - External APIs for text extraction and classification (Google Vision API).
 4. **Database** - Secure cloud-based storage for user and verification data (MongoDB).
 5. **Security Layer** - Implements encryption, authentication, and access control (JWT).
@@ -63,8 +63,6 @@ The KYC (Know Your Customer) application automates identity verification by proc
 
 1. **Code pushed to GitHub/GitLab.**
 2. **Automated testing & linting.**
-3. **Deployment via Docker/Kubernetes (if required).**
-4. **Monitoring with AWS CloudWatch/Datadog.**
 
 ## Conclusion
 
