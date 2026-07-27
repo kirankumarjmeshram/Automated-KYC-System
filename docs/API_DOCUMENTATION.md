@@ -40,11 +40,11 @@ Returns the operational health and uptime of the Express backend server.
 ### 2.2 Dual-Document Verification Endpoint
 
 #### `POST /api/verify`
-Primary KYC submission endpoint. Accepts user details and document images (`aadhaarFile`, `panFile`), processes images through the OCR pipeline, and validates entered attributes against document data.
+Primary KYC submission endpoint. Accepts user details and document images (`aadhaarFile`, `panFile`), dispatches images to the Python FastAPI microservice (`POST /ocr/process`), and validates entered attributes against document data.
 
 * **URL Path**: `/api/verify`
 * **Method**: `POST`
-* **Authentication**: Optional / Public (Target: Clerk Auth required)
+* **Authentication**: Optional / Public
 * **Request Headers**: `Content-Type: multipart/form-data`
 
 #### Form Parameters (`multipart/form-data`)
@@ -55,7 +55,6 @@ Primary KYC submission endpoint. Accepts user details and document images (`aadh
 | `pan` | String | No | 10-character alphanumeric PAN number |
 | `aadhaarFile` | File (Image)| Optional | Binary image file of Aadhaar Card (JPG/PNG) |
 | `panFile` | File (Image)| Optional | Binary image file of PAN Card (JPG/PNG) |
-| `file` | File (Image)| Optional | Legacy generic single file parameter |
 
 #### Example `cURL` Command
 ```bash
@@ -78,58 +77,19 @@ curl -X POST http://localhost:5000/api/verify \
       "name": "RAHUL SHARMA",
       "number": "123456789012",
       "dob": "12/05/1990",
-      "fallback": false
+      "gender": "",
+      "address": ""
     },
     "pan": {
       "type": "PAN",
       "name": "RAHUL SHARMA",
       "number": "ABCDE1234F",
-      "dob": "",
-      "fallback": false
+      "dob": "12/05/1990",
+      "gender": "",
+      "address": ""
     },
     "ocrConfigured": true
   }
-}
-```
-
-#### Response (200 OK - Verification in Fallback Mode)
-```json
-{
-  "success": true,
-  "message": "KYC documents received. OCR verification will be available when AI service is configured.",
-  "details": {
-    "aadhaar": {
-      "type": "Aadhaar",
-      "name": "RAHUL SHARMA",
-      "number": "123456789012",
-      "dob": "12/05/1990",
-      "fallback": true
-    },
-    "pan": {
-      "type": "PAN",
-      "name": "RAHUL SHARMA",
-      "number": "ABCDE1234F",
-      "dob": "",
-      "fallback": true
-    },
-    "ocrConfigured": false
-  }
-}
-```
-
-#### Response (400 Bad Request - Validation Error)
-```json
-{
-  "success": false,
-  "error": "Aadhaar number mismatch. PAN number mismatch."
-}
-```
-
-#### Response (400 Bad Request - Missing Parameters)
-```json
-{
-  "success": false,
-  "error": "Missing form data"
 }
 ```
 
@@ -150,12 +110,6 @@ Single-file endpoint for extracting text attributes from an individual Aadhaar o
 | :--- | :--- | :--- | :--- |
 | `file` | File (Image)| Yes | Binary image file of document (JPG/PNG) |
 
-#### Example `cURL` Command
-```bash
-curl -X POST http://localhost:5000/api/process \
-  -F "file=@/path/to/document.jpg"
-```
-
 #### Response (200 OK)
 ```json
 {
@@ -164,17 +118,8 @@ curl -X POST http://localhost:5000/api/process \
     "type": "Aadhaar",
     "name": "RAHUL SHARMA",
     "number": "123456789012",
-    "dob": "12/05/1990",
-    "fallback": false
+    "dob": "12/05/1990"
   }
-}
-```
-
-#### Response (400 Bad Request)
-```json
-{
-  "success": false,
-  "message": "No file uploaded"
 }
 ```
 
@@ -185,7 +130,7 @@ curl -X POST http://localhost:5000/api/process \
 ### 3.1 Service Health Status
 
 #### `GET /health`
-Returns the status of the Python FastAPI AI service.
+Returns the operational health and environment configuration of the Python FastAPI AI service.
 
 * **URL Path**: `/health`
 * **Method**: `GET`
@@ -195,51 +140,52 @@ Returns the status of the Python FastAPI AI service.
 ```json
 {
   "status": "healthy",
-  "service": "ai_service"
+  "service": "ai_service",
+  "version": "1.2.0",
+  "environment": "development"
 }
 ```
 
 ---
 
-### 3.2 Planned AI Service Endpoints (Phase 2 & 3)
+### 3.2 AI OCR Processing Endpoint (Phase 2 Implemented)
 
-#### `POST /ocr/process` [PLANNED]
-Extracts structured OCR data using PaddleOCR / EasyOCR and Gemini LLM.
+#### `POST /ocr/process`
+Pre-processes document image via OpenCV, executes dual-engine OCR (PaddleOCR primary -> EasyOCR fallback), and structures output via Gemini LLM / Pydantic schemas.
 
 * **URL Path**: `/ocr/process`
 * **Method**: `POST`
-* **Request Format**: `multipart/form-data` (file: `document`)
-* **Response (200 OK)**:
-  ```json
-  {
-    "success": true,
-    "document_type": "Aadhaar",
-    "confidence_score": 0.96,
-    "extracted_fields": {
-      "name": "RAHUL SHARMA",
-      "number": "123456789012",
-      "dob": "12/05/1990",
-      "gender": "Male",
-      "address": "123 Main Street, New Delhi 110001"
-    }
-  }
-  ```
+* **Authentication**: None (Internal RPC)
+* **Request Headers**: `Content-Type: multipart/form-data`
+* **Form Parameter**: `file` (File stream)
 
-#### `POST /facial/match` [PLANNED]
-Compares document photo crop against selfie image using InsightFace vector embeddings.
+#### Example `cURL` Command
+```bash
+curl -X POST http://localhost:8000/ocr/process \
+  -F "file=@/path/to/document.png"
+```
 
-* **URL Path**: `/facial/match`
-* **Method**: `POST`
-* **Request Format**: `multipart/form-data` (`document_photo`, `selfie`)
-* **Response (200 OK)**:
-  ```json
-  {
-    "success": true,
-    "similarity_score": 0.89,
-    "match_decision": "MATCH",
-    "confidence": "HIGH"
-  }
-  ```
+#### Response (200 OK - Structured Identity JSON)
+```json
+{
+  "success": true,
+  "document_type": "Aadhaar",
+  "confidence_score": 0.94,
+  "details": {
+    "type": "Aadhaar",
+    "name": "RAHUL SHARMA",
+    "number": "123456789012",
+    "dob": "12/05/1990",
+    "gender": "Male",
+    "address": "New Delhi"
+  },
+  "raw_text": "GOVERNMENT OF INDIA Aadhaar 1234 5678 9012 DOB: 12/05/1990 Rahul Sharma",
+  "ocr_engine": "PaddleOCR",
+  "bounding_boxes": [],
+  "fallback": false,
+  "message": "OCR processed successfully via PaddleOCR"
+}
+```
 
 ---
 
@@ -256,10 +202,3 @@ All API responses returning HTTP status codes `400`, `404`, or `500` strictly co
   ]
 }
 ```
-
-### HTTP Status Code Index
-* **`200 OK`**: Request executed successfully.
-* **`400 Bad Request`**: Validation error, missing parameters, or invalid format.
-* **`404 Not Found`**: Endpoint or requested resource does not exist.
-* **`429 Too Many Requests`**: Rate limit exceeded (Max 100 requests per 15 minutes).
-* **`500 Internal Server Error`**: Unexpected backend failure or unhandled exception.

@@ -1,6 +1,8 @@
 const vision = require("@google-cloud/vision");
 const sharp = require("sharp");
 const logger = require("../logger");
+const { processImageWithAI } = require("../services/aiService");
+const VerificationStatus = require("../constants/verificationStatus");
 
 let client = null;
 try {
@@ -15,99 +17,120 @@ const processImage = async (file) => {
   try {
     if (!file || !file.buffer) {
       logger.error("Invalid file: No buffer detected.");
-      return { success: false, error: "Invalid file input" };
+      return {
+        success: false,
+        status: VerificationStatus.OCR_FAILED,
+        verified: false,
+        error: "Invalid file input",
+      };
     }
 
-    logger.info(`Processing image: ${file.originalname}, Size: ${file.size}`);
+    logger.info(`[${VerificationStatus.OCR_PROCESSING}] Processing image: ${file.originalname}, Size: ${file.size}`);
 
-    let extractedText = "";
-    let usingFallback = false;
+    // Step 1: Attempt extraction via Python FastAPI AI Microservice
+    const aiResult = await processImageWithAI(file);
+    if (aiResult) {
+      return aiResult;
+    }
 
-    // Try image enhancement + Google Vision API
-    try {
-      const enhancedBuffer = await sharp(file.buffer)
-        .resize(1000)
-        .png({ quality: 100 })
-        .toBuffer();
+    // Step 2: Local Google Vision API processing if client configured
+    if (client) {
+      try {
+        const enhancedBuffer = await sharp(file.buffer)
+          .resize(1000)
+          .png({ quality: 100 })
+          .toBuffer();
 
-      if (client) {
         const base64Image = enhancedBuffer.toString("base64");
         const [result] = await client.textDetection({ image: { content: base64Image } });
-        extractedText = result.textAnnotations[0]?.description || "";
-        logger.info(`Extracted Google Vision Text: ${extractedText}`);
-      }
-    } catch (processingErr) {
-      logger.warn(`Image processing/Vision API error: ${processingErr.message}. Using fallback.`);
-    }
+        const extractedText = result.textAnnotations[0]?.description || "";
 
-    // Fallback if Vision API wasn't available or didn't return text
-    if (!extractedText) {
-      usingFallback = true;
-      logger.info("Using fallback document parser (OCR not configured).");
-      const fileNameUpper = file.originalname.toUpperCase();
-      if (fileNameUpper.includes("AADHAAR") || fileNameUpper.includes("ADHAR")) {
-        extractedText = "GOVERNMENT OF INDIA Aadhaar 1234 5678 9012 DOB: 12/05/1990 Rahul Sharma";
-      } else if (fileNameUpper.includes("PAN")) {
-        extractedText = "INCOME TAX DEPARTMENT ABCDE1234F RAHUL SHARMA DOB: 12/05/1990";
-      } else {
-        extractedText = "INCOME TAX DEPARTMENT ABCDE1234F Aadhaar 1234 5678 9012 DOB: 12/05/1990 RAHUL SHARMA";
+        if (extractedText) {
+          const details = extractDetailsFromText(extractedText);
+          if (details && details.type) {
+            logger.info(`[${VerificationStatus.OCR_COMPLETED}] Extracted details via Google Vision API`);
+            return {
+              success: true,
+              status: VerificationStatus.OCR_COMPLETED,
+              verified: false,
+              details: details,
+            };
+          }
+        }
+      } catch (processingErr) {
+        logger.warn(`Google Vision API error: ${processingErr.message}`);
       }
     }
 
-    // Extract Aadhaar & PAN details from text
-    const details = extractDetails(extractedText);
-    details.fallback = usingFallback;
-    logger.info(`Extracted Details: ${JSON.stringify(details)}`);
-
-    return details;
+    // If no OCR engine succeeded, return OCR_UNAVAILABLE or OCR_FAILED without dummy data
+    logger.warn(`[${VerificationStatus.OCR_UNAVAILABLE}] No active OCR engine available for ${file.originalname}`);
+    return {
+      success: true,
+      status: VerificationStatus.OCR_UNAVAILABLE,
+      verified: false,
+      details: null,
+      message: "Documents uploaded successfully. AI OCR service is not configured.",
+    };
   } catch (error) {
-    logger.error(`Error in OCR processing: ${error}`);
-    return { success: false, error: "OCR processing failed" };
+    logger.error(`Error in OCR processing: ${error.message}`);
+    return {
+      success: false,
+      status: VerificationStatus.OCR_FAILED,
+      verified: false,
+      error: "OCR processing failed",
+    };
   }
 };
 
-const extractDetails = (extractedText) => {
+const extractDetailsFromText = (extractedText) => {
+  if (!extractedText) return null;
+
   let details = { type: "", name: "", number: "", dob: "" };
   const lines = extractedText.split("\n").map((line) => line.trim());
 
-  if (extractedText.includes("आधार") || extractedText.includes("Aadhaar") || extractedText.includes("1234 5678 9012")) {
+  if (extractedText.includes("आधार") || extractedText.includes("Aadhaar")) {
     details.type = "Aadhaar";
 
-    // Extract Aadhaar number
     const aadhaarMatch = extractedText.match(/\b\d{4}\s?\d{4}\s?\d{4}\b/);
     if (aadhaarMatch) {
-      details.number = aadhaarMatch[0].replace(/\s/g, ""); // Remove spaces
+      details.number = aadhaarMatch[0].replace(/\s/g, "");
     }
 
-    // Extract Name (above DOB or from text)
+    const dobMatch = extractedText.match(/\b\d{2}\/\d{2}\/\d{4}\b/);
+    if (dobMatch) {
+      details.dob = dobMatch[0];
+    }
+
     for (let i = 0; i < lines.length; i++) {
-      if (lines[i].includes("DOB") || lines[i].includes("जन्म तारीख")) {
-        details.dob = lines[i].match(/\d{2}\/\d{2}\/\d{4}/)?.[0] || "";
-        if (i > 1) details.name = lines[i - 2] + " " + lines[i - 1];
-        break;
+      if (lines[i].includes("DOB") || lines[i].includes("DATE OF BIRTH") || lines[i].includes("Birth")) {
+        if (i > 0 && lines[i - 1] && !lines[i - 1].includes("INDIA")) {
+          details.name = lines[i - 1].toUpperCase();
+          break;
+        }
       }
     }
-    if (!details.name) details.name = "RAHUL SHARMA";
-  } else if (extractedText.includes("INCOME TAX DEPARTMENT") || extractedText.includes("ABCDE1234F")) {
+  } else if (extractedText.includes("INCOME TAX DEPARTMENT") || extractedText.match(/\b[A-Z]{5}[0-9]{4}[A-Z]\b/)) {
     details.type = "PAN";
 
-    // Extract PAN Number
     const panMatch = extractedText.match(/\b[A-Z]{5}[0-9]{4}[A-Z]\b/);
     if (panMatch) {
       details.number = panMatch[0];
     }
 
-    // Extract Name
+    const dobMatch = extractedText.match(/\b\d{2}\/\d{2}\/\d{4}\b/);
+    if (dobMatch) {
+      details.dob = dobMatch[0];
+    }
+
     for (let i = 0; i < lines.length; i++) {
-      if (!lines[i].includes("INCOME TAX DEPARTMENT") && lines[i].match(/^[A-Z ]+$/)) {
-        details.name = lines[i].trim();
+      if (!lines[i].includes("INCOME TAX") && !lines[i].includes("GOVT OF INDIA") && lines[i].match(/^[A-Z ]{3,30}$/)) {
+        details.name = lines[i].trim().toUpperCase();
         break;
       }
     }
-    if (!details.name) details.name = "RAHUL SHARMA";
   }
 
-  return { success: true, details };
+  return details.type ? details : null;
 };
 
 module.exports = { processImage };

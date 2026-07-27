@@ -1,7 +1,7 @@
-// KycStepupForm.js
 import React, { useState } from "react";
 import { Container, Form, Button, Card, Alert, ProgressBar } from "react-bootstrap";
 import axios from "axios";
+import VerificationResult from "./VerificationResult";
 
 const KycStepupForm = () => {
   const [step, setStep] = useState(1);
@@ -25,6 +25,7 @@ const KycStepupForm = () => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError("");
+    setVerificationResult(null);
     setLoading(true);
 
     if (!files.aadhaarFile || !files.panFile) {
@@ -45,55 +46,99 @@ const KycStepupForm = () => {
         headers: { "Accept": "application/json" },
       });
       setVerificationResult(response.data);
-    } catch (error) {
-      setError("Verification failed. Please try again.");
+    } catch (err) {
+      if (err.response && err.response.data) {
+        setVerificationResult(err.response.data);
+      } else {
+        setError("Network error. Could not connect to verification server.");
+      }
     }
     setLoading(false);
   };
 
   return (
     <Container className="mt-4">
-      <Card>
+      <Card className="shadow-sm border-0">
         <Card.Body>
-          <h2 className="text-center">KYC Verification</h2>
+          <h2 className="text-center fw-bold mb-4">KYC Verification</h2>
+
           {step === 1 && (
             <Form>
-              <Form.Group>
-                <Form.Label>Name</Form.Label>
-                <Form.Control type="text" name="name" value={formData.name} onChange={handleChange} required />
+              <Form.Group className="mb-3">
+                <Form.Label className="fw-bold">Full Name</Form.Label>
+                <Form.Control
+                  type="text"
+                  name="name"
+                  value={formData.name}
+                  onChange={handleChange}
+                  placeholder="Enter full name as on documents"
+                  required
+                />
               </Form.Group>
-              <Form.Group>
-                <Form.Label>Aadhaar Number</Form.Label>
-                <Form.Control type="text" name="aadhaar" value={formData.aadhaar} onChange={handleChange} required />
+
+              <Form.Group className="mb-3">
+                <Form.Label className="fw-bold">Aadhaar Number</Form.Label>
+                <Form.Control
+                  type="text"
+                  name="aadhaar"
+                  value={formData.aadhaar}
+                  onChange={handleChange}
+                  placeholder="12-digit Aadhaar Number"
+                  required
+                />
               </Form.Group>
-              <Form.Group>
-                <Form.Label>PAN Number</Form.Label>
-                <Form.Control type="text" name="pan" value={formData.pan} onChange={handleChange} required />
+
+              <Form.Group className="mb-3">
+                <Form.Label className="fw-bold">PAN Number</Form.Label>
+                <Form.Control
+                  type="text"
+                  name="pan"
+                  value={formData.pan}
+                  onChange={handleChange}
+                  placeholder="10-character PAN Number"
+                  required
+                />
               </Form.Group>
-              <Button onClick={nextStep} className="mt-3">Next</Button>
+
+              <Button onClick={nextStep} variant="primary" className="mt-2 w-100">
+                Next
+              </Button>
             </Form>
           )}
+
           {step === 2 && (
             <Form onSubmit={handleSubmit} encType="multipart/form-data">
-              <Form.Group>
-                <Form.Label>Upload Aadhaar Card</Form.Label>
+              <Form.Group className="mb-3">
+                <Form.Label className="fw-bold">Upload Aadhaar Card Image</Form.Label>
                 <Form.Control type="file" name="aadhaarFile" onChange={handleFileChange} required />
               </Form.Group>
-              <Form.Group>
-                <Form.Label>Upload PAN Card</Form.Label>
+
+              <Form.Group className="mb-3">
+                <Form.Label className="fw-bold">Upload PAN Card Image</Form.Label>
                 <Form.Control type="file" name="panFile" onChange={handleFileChange} required />
               </Form.Group>
+
               {error && <Alert variant="danger" className="mt-3">{error}</Alert>}
-              <Button onClick={prevStep} className="mt-3 me-2">Back</Button>
-              <Button type="submit" className="mt-3" disabled={loading}>{loading ? "Processing..." : "Submit"}</Button>
+
+              <div className="d-flex justify-content-between mt-4">
+                <Button onClick={prevStep} variant="outline-secondary">
+                  Back
+                </Button>
+                <Button type="submit" variant="success" disabled={loading}>
+                  {loading ? "Processing..." : "Submit Verification"}
+                </Button>
+              </div>
             </Form>
           )}
-          {loading && <ProgressBar animated now={100} className="mt-3" />}
-          {verificationResult && (
-            <Alert className="mt-3" variant={verificationResult.success ? "success" : "danger"}>
-              {verificationResult.success ? "KYC Verified Successfully!" : `Verification Failed: ${verificationResult.error}`}
-            </Alert>
+
+          {loading && (
+            <div className="mt-4 text-center">
+              <p className="text-muted fw-bold">Processing documents with AI engine...</p>
+              <ProgressBar animated now={100} variant="info" />
+            </div>
           )}
+
+          {verificationResult && <VerificationResult data={verificationResult} />}
         </Card.Body>
       </Card>
     </Container>

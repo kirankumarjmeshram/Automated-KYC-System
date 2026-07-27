@@ -1,11 +1,19 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-import os
+from app.routers import ocr_router
+from app.config.settings import settings
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+)
+logger = logging.getLogger("ai_service")
 
 app = FastAPI(
-    title="AI KYC Service",
-    description="FastAPI service for OCR, Face Verification, and Liveness Detection",
-    version="1.0.0"
+    title=settings.APP_NAME,
+    description="FastAPI service for OpenCV Preprocessing, Dual-Engine OCR (PaddleOCR/EasyOCR), and Gemini LLM Document Verification",
+    version="1.2.0"
 )
 
 app.add_middleware(
@@ -16,10 +24,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Register Routers
+app.include_router(ocr_router.router)
+
 @app.get("/")
 def read_root():
-    return {"message": "AI KYC Service is running"}
+    return {
+        "message": f"{settings.APP_NAME} is running",
+        "version": "1.2.0",
+        "docs": "/docs"
+    }
 
 @app.get("/health")
 def health_check():
-    return {"status": "healthy", "service": "ai_service"}
+    return {
+        "status": "healthy",
+        "service": "ai_service",
+        "version": "1.2.0",
+        "environment": settings.ENVIRONMENT
+    }

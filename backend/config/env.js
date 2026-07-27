@@ -6,6 +6,7 @@ const envSchema = z.object({
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
   MONGODB_URI: z.string().default(process.env.MONGO_URI || process.env.MONGODB_URI || "mongodb://localhost:27017/kyc_db"),
   CORS_ORIGIN: z.string().default("http://localhost:3000"),
+  AI_SERVICE_URL: z.string().default("http://localhost:8000"),
 });
 
 const parseEnv = () => {
