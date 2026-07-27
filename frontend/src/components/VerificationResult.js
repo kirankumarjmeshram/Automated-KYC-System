@@ -1,11 +1,12 @@
 import React from "react";
-import { Alert, Card, Badge } from "react-bootstrap";
+import { Alert, Badge } from "react-bootstrap";
 
 const VerificationResult = ({ data }) => {
   if (!data) return null;
 
   const status = data.status || "REJECTED";
   const isVerified = data.verified === true;
+  const traceId = data.traceId || "";
 
   // Case 1: VERIFIED
   if (isVerified && status === "VERIFIED") {
@@ -13,7 +14,10 @@ const VerificationResult = ({ data }) => {
       <Alert variant="success" className="mt-4 border-0 shadow-sm">
         <Alert.Heading className="d-flex align-items-center justify-content-between">
           <span>✓ KYC Successfully Verified</span>
-          <Badge bg="success">VERIFIED</Badge>
+          <div>
+            <Badge bg="success" className="me-2">VERIFIED</Badge>
+            {traceId && <Badge bg="light" text="dark">Trace: {traceId.substring(0, 8)}...</Badge>}
+          </div>
         </Alert.Heading>
         <p className="mb-0">{data.message || "All submitted document attributes matched successfully."}</p>
         {data.details && (
@@ -41,7 +45,10 @@ const VerificationResult = ({ data }) => {
       <Alert variant="warning" className="mt-4 border-0 shadow-sm">
         <Alert.Heading className="d-flex align-items-center justify-content-between">
           <span>✓ Documents Uploaded</span>
-          <Badge bg="warning" text="dark">OCR UNAVAILABLE</Badge>
+          <div>
+            <Badge bg="warning" text="dark" className="me-2">OCR UNAVAILABLE</Badge>
+            {traceId && <Badge bg="light" text="dark">Trace: {traceId.substring(0, 8)}...</Badge>}
+          </div>
         </Alert.Heading>
         <p className="mb-0">
           <strong>⚠️ AI OCR Service Not Available</strong>
@@ -50,7 +57,7 @@ const VerificationResult = ({ data }) => {
           {data.message || "Documents were uploaded successfully. Automated AI OCR verification is currently unconfigured or offline."}
         </p>
         <div className="mt-2 text-secondary small">
-          <em>Verification Status: Unverified (`verified: false`)</em>
+          <em>Verification Status: Unverified (`verified: false`) | Trace ID: `{traceId}`</em>
         </div>
       </Alert>
     );
@@ -75,9 +82,13 @@ const VerificationResult = ({ data }) => {
       <Alert variant="danger" className="mt-4 border-0 shadow-sm">
         <Alert.Heading className="d-flex align-items-center justify-content-between">
           <span>❌ OCR Extraction Failed</span>
-          <Badge bg="danger">OCR FAILED</Badge>
+          <div>
+            <Badge bg="danger" className="me-2">OCR FAILED</Badge>
+            {traceId && <Badge bg="light" text="dark">Trace: {traceId.substring(0, 8)}...</Badge>}
+          </div>
         </Alert.Heading>
         <p className="mb-0">{data.message || "Could not read text from uploaded document images. Please upload clearer document photos."}</p>
+        {traceId && <div className="mt-2 text-secondary small"><em>Trace ID: `{traceId}`</em></div>}
       </Alert>
     );
   }
@@ -88,21 +99,28 @@ const VerificationResult = ({ data }) => {
       <Alert variant="warning" className="mt-4 border-0 shadow-sm">
         <Alert.Heading className="d-flex align-items-center justify-content-between">
           <span>⏳ Waiting for Manual Review</span>
-          <Badge bg="secondary">MANUAL REVIEW</Badge>
+          <div>
+            <Badge bg="secondary" className="me-2">MANUAL REVIEW</Badge>
+            {traceId && <Badge bg="light" text="dark">Trace: {traceId.substring(0, 8)}...</Badge>}
+          </div>
         </Alert.Heading>
         <p className="mb-0">{data.message || "Document extraction confidence is below threshold. Forwarded to a compliance officer."}</p>
       </Alert>
     );
   }
 
-  // Case 6: REJECTED (or fallback error)
+  // Case 6: REJECTED
   return (
     <Alert variant="danger" className="mt-4 border-0 shadow-sm">
       <Alert.Heading className="d-flex align-items-center justify-content-between">
         <span>❌ KYC Verification Rejected</span>
-        <Badge bg="danger">REJECTED</Badge>
+        <div>
+          <Badge bg="danger" className="me-2">REJECTED</Badge>
+          {traceId && <Badge bg="light" text="dark">Trace: {traceId.substring(0, 8)}...</Badge>}
+        </div>
       </Alert.Heading>
       <p className="mb-0">{data.message || data.error || "Verification failed due to document mismatch or invalid inputs."}</p>
+      {traceId && <div className="mt-2 text-secondary small"><em>Trace ID: `{traceId}`</em></div>}
     </Alert>
   );
 };

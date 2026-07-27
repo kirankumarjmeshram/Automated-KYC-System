@@ -1,6 +1,7 @@
 const vision = require("@google-cloud/vision");
 const sharp = require("sharp");
 const logger = require("../logger");
+const { logOcrStep, logPerformance } = require("../logger");
 const { processImageWithAI } = require("../services/aiService");
 const VerificationStatus = require("../constants/verificationStatus");
 
@@ -13,10 +14,11 @@ try {
   logger.warn("Google Vision Client initialization skipped: " + err.message);
 }
 
-const processImage = async (file) => {
+const processImage = async (file, traceId = "internal-trace") => {
+  const startTime = Date.now();
   try {
     if (!file || !file.buffer) {
-      logger.error("Invalid file: No buffer detected.");
+      logOcrStep({ traceId, step: "IMAGE_VALIDATION_FAILED", fileName: file?.originalname || "unknown" });
       return {
         success: false,
         status: VerificationStatus.OCR_FAILED,
@@ -25,10 +27,10 @@ const processImage = async (file) => {
       };
     }
 
-    logger.info(`[${VerificationStatus.OCR_PROCESSING}] Processing image: ${file.originalname}, Size: ${file.size}`);
+    logOcrStep({ traceId, step: "IMAGE_VALIDATION_SUCCESS", fileName: file.originalname, message: `Size=${file.size}bytes` });
 
     // Step 1: Attempt extraction via Python FastAPI AI Microservice
-    const aiResult = await processImageWithAI(file);
+    const aiResult = await processImageWithAI(file, traceId);
     if (aiResult) {
       return aiResult;
     }
@@ -36,19 +38,23 @@ const processImage = async (file) => {
     // Step 2: Local Google Vision API processing if client configured
     if (client) {
       try {
+        const prepStart = Date.now();
         const enhancedBuffer = await sharp(file.buffer)
           .resize(1000)
           .png({ quality: 100 })
           .toBuffer();
+        logPerformance({ traceId, operation: "IMAGE_PREPROCESSING", durationMs: Date.now() - prepStart });
 
+        const visionStart = Date.now();
         const base64Image = enhancedBuffer.toString("base64");
         const [result] = await client.textDetection({ image: { content: base64Image } });
         const extractedText = result.textAnnotations[0]?.description || "";
+        logPerformance({ traceId, operation: "GOOGLE_VISION_CALL", durationMs: Date.now() - visionStart });
 
         if (extractedText) {
           const details = extractDetailsFromText(extractedText);
           if (details && details.type) {
-            logger.info(`[${VerificationStatus.OCR_COMPLETED}] Extracted details via Google Vision API`);
+            logOcrStep({ traceId, step: "VISION_OCR_SUCCESS", fileName: file.originalname });
             return {
               success: true,
               status: VerificationStatus.OCR_COMPLETED,
@@ -58,12 +64,11 @@ const processImage = async (file) => {
           }
         }
       } catch (processingErr) {
-        logger.warn(`Google Vision API error: ${processingErr.message}`);
+        logOcrStep({ traceId, step: "VISION_OCR_ERROR", fileName: file.originalname, message: processingErr.message });
       }
     }
 
-    // If no OCR engine succeeded, return OCR_UNAVAILABLE or OCR_FAILED without dummy data
-    logger.warn(`[${VerificationStatus.OCR_UNAVAILABLE}] No active OCR engine available for ${file.originalname}`);
+    logOcrStep({ traceId, step: "NO_OCR_ENGINE_AVAILABLE", fileName: file.originalname });
     return {
       success: true,
       status: VerificationStatus.OCR_UNAVAILABLE,
@@ -72,13 +77,15 @@ const processImage = async (file) => {
       message: "Documents uploaded successfully. AI OCR service is not configured.",
     };
   } catch (error) {
-    logger.error(`Error in OCR processing: ${error.message}`);
+    logOcrStep({ traceId, step: "OCR_PROCESSING_ERROR", fileName: file?.originalname || "unknown", message: error.message });
     return {
       success: false,
       status: VerificationStatus.OCR_FAILED,
       verified: false,
       error: "OCR processing failed",
     };
+  } finally {
+    logPerformance({ traceId, operation: "TOTAL_DOCUMENT_PROCESSING", durationMs: Date.now() - startTime });
   }
 };
 

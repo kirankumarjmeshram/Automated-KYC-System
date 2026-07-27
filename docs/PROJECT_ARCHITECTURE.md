@@ -7,7 +7,7 @@ The **Automated KYC System** is a production-grade digital Know Your Customer (K
 ### Core Architecture Stack
 * **Frontend**: React 19, React-Bootstrap, React Router DOM v7, Axios (`frontend/`)
 * **Backend API Gateway**: Node.js, Express 4.x, Multer (memory storage), Winston Logger, Helmet, Rate Limiter, Zod, Mongoose (`backend/`)
-* **AI & Computer Vision Service**: Python 3.10+, FastAPI 0.140+, OpenCV, PaddleOCR / EasyOCR, Google Generative AI (Gemini 1.5 Flash), Pydantic (`ai_service/`)
+* **AI & Computer Vision Service**: Python 3.10+, FastAPI 0.140+, OpenCV, PaddleOCR / EasyOCR, Google Generative AI (Gemini Flash), Pydantic (`ai_service/`)
 * **Database**: MongoDB Atlas (Mongoose ODM)
 * **Cloud Storage & Auth (Target Architecture)**: AWS S3, Clerk Authentication
 
@@ -17,14 +17,14 @@ The **Automated KYC System** is a production-grade digital Know Your Customer (K
                │            (Port 3000 / Vercel)          │
                └────────────────────┬─────────────────────┘
                                     │
-                         HTTP REST / Multipart
+                         HTTP REST / Multipart (x-trace-id)
                                     │
                ┌────────────────────▼─────────────────────┐
                │           Express Backend API            │
                │            (Port 5000 / Render)          │
                └─────────┬──────────────────────┬─────────┘
                          │                      │
-        MongoDB Driver   │                      │ HTTP Client (Axios Multipart)
+        MongoDB Driver   │                      │ HTTP RPC Stream (x-trace-id)
                          │                      │ POST http://localhost:8000/ocr/process
    ┌─────────────────────▼──────┐   ┌───────────▼─────────────────────┐
    │       MongoDB Atlas        │   │        FastAPI AI Service       │
@@ -40,95 +40,57 @@ The **Automated KYC System** is a production-grade digital Know Your Customer (K
 
 ---
 
-## 2. Complete Project Directory Structure
+## 2. Centralized Logging Architecture & Trace ID Flow (Phase 2.1)
+
+### 2.1 Trace ID Lifecycle Across Service Boundaries
+Every KYC submission is assigned a unique UUID `traceId` (`8e7d4d74-b8dd-4cf2-9dd4-b0b51f5ef6af`) that propagates across all service tiers:
 
 ```
-Automated-KYC-System/
-├── docs/                         <-- System Architecture & Standards Documentation
-│   ├── API_DOCUMENTATION.md
-│   ├── CODING_STANDARDS.md
-│   ├── CONTRIBUTING.md
-│   ├── DATA_FLOW.md
-│   ├── DEPLOYMENT_ARCHITECTURE.md
-│   ├── DESIGN_DECISIONS.md
-│   ├── DEVELOPMENT_GUIDE.md
-│   ├── ERROR_HANDLING_GUIDE.md
-│   ├── FOLDER_STRUCTURE_GUIDE.md
-│   ├── IMPLEMENTATION_PLAN.md
-│   ├── PROJECT_ARCHITECTURE.md
-│   ├── PROJECT_FLOW.md
-│   ├── TESTING_STRATEGY.md
-│   └── Technical_Solution_Document.md
-├── package.json                  <-- Root workspace orchestration
-├── package-lock.json
-│
-├── frontend/                     <-- React Single Page Application (CRA)
-│   ├── .env                      <-- Frontend environment config
-│   ├── package.json
-│   └── src/
-│       ├── App.js                <-- Root application component
-│       ├── components/           <-- Reusable UI components
-│       │   ├── AadhaarPanForm.js     <-- Single-file upload component (/api/process)
-│       │   ├── KycStepupForm.js     <-- Dual-document verification component (/api/verify)
-│       │   ├── Navbar.js             <-- Primary navigation bar
-│       │   └── VerificationResult.js <-- Result rendering component
-│       └── pages/                <-- Page-level view components
-│           ├── Home.js
-│           └── Verify.js
-│
-├── backend/                      <-- Express Node.js Backend API
-│   ├── .env                      <-- Backend environment config
-│   ├── logger.js                 <-- Winston logging module (Console + File)
-│   ├── package.json
-│   ├── server.js                 <-- Express app initialization & route mounting
-│   ├── config/                   <-- Centralized configuration handlers
-│   │   ├── db.js                 <-- Mongoose MongoDB connection initializer
-│   │   └── env.js                <-- Zod env validation (includes AI_SERVICE_URL)
-│   ├── controllers/              <-- Express request handlers
-│   │   └── documentController.js <-- Invokes aiService.js with local fallback safety
-│   ├── models/                   <-- Mongoose schemas & data models
-│   │   └── Document.js           <-- Document record schema
-│   ├── routes/                   <-- API endpoint definitions
-│   │   └── documentRoutes.js     <-- Multer file upload & document endpoints
-│   ├── services/                 <-- Service abstraction layer
-│   │   └── aiService.js          <-- [PHASE 2] Express-to-FastAPI HTTP RPC client
-│   ├── middlewares/              <-- Express custom middleware
-│   │   ├── errorHandler.js       <-- Centralized error response handler
-│   │   └── validate.js           <-- Zod request payload validator
-│   └── logs/                     <-- Application runtime logs
-│       └── application.log
-│
-└── ai_service/                   <-- [PHASE 2] FastAPI Python Microservice
-    ├── .env                      <-- Python environment config
-    ├── requirements.txt          <-- Python package dependencies
-    └── app/
-        ├── main.py               <-- FastAPI app instance & health endpoints
-        ├── config/
-        │   └── settings.py       <-- Centralized Pydantic settings
-        ├── models/
-        │   └── ocr_schemas.py    <-- Pydantic request/response schemas
-        ├── services/
-        │   ├── cv_service.py     <-- OpenCV pre-processing & deskewing
-        │   ├── ocr_service.py    <-- PaddleOCR & EasyOCR dual-engine pipeline
-        │   └── gemini_service.py <-- Gemini LLM text structuring
-        └── routers/
-            └── ocr_router.py     <-- POST /ocr/process endpoint
+[React Frontend] ── x-trace-id: UUID ──> [Express API Gateway] ── x-trace-id: UUID ──> [FastAPI AI Service]
+       ▲                                         │                                            │
+       │                                         ▼                                            ▼
+       └──────── traceId in JSON Response ───────┴────── Logged in backend/logs/ ─────────────┘
 ```
+
+### 2.2 Backend Multi-File Winston Logger Hierarchy (`backend/logs/`)
+1. **`requests.log`**: HTTP request duration, method, path, IP, user-agent, status code, and `TraceID`.
+2. **`audit.log`**: Status transition timeline events (`UPLOADED` -> `OCR_PROCESSING` -> `OCR_COMPLETED` -> `VERIFIED` / `REJECTED`).
+3. **`ocr.log`**: Granular OCR extraction steps (`PADDLE_SUCCESS`, `EASYOCR_SUCCESS`, `GEMINI_COMPLETED`, `FIELD_EXTRACTION`).
+4. **`performance.log`**: Timing metrics for OpenCV preprocessing, AI RPC call, data matching, and total duration.
+5. **`application.log`**: General application execution logs.
+6. **`error.log`**: Formatted error stack traces and failure metadata.
 
 ---
 
-## 3. Layer Analysis & Phase 2 Architecture
+## 3. Directory Structure
 
-### 3.1 AI Service (`/ai_service`)
-FastAPI service engineered for low-latency computer vision & ML tasks.
-* **`app/main.py`**: Initializes FastAPI app instance with CORS middleware, health endpoints (`GET /`, `GET /health`), and mounts `ocr_router`.
-* **`app/config/settings.py`**: Parses `PORT`, `GEMINI_API_KEY`, `ENVIRONMENT`, `PADDLE_OCR_LANG` with Pydantic field validators.
-* **`app/models/ocr_schemas.py`**: Pydantic models for structured document output (`ExtractedDetails`, `OCRResponse`, `BoundingBox`).
-* **`app/services/cv_service.py`**: OpenCV pre-processing pipeline (resizing, grayscale conversion, Gaussian blur noise reduction, adaptive thresholding, deskew transformation).
-* **`app/services/ocr_service.py`**: Dual-engine extraction (`PaddleOCR` primary, `EasyOCR` fallback, `FallbackParser` metadata parser fallback).
-* **`app/services/gemini_service.py`**: Dispatches extracted OCR text to `gemini-1.5-flash` for JSON normalization with deterministic regex fallback.
-* **`app/routers/ocr_router.py`**: Exposes `POST /ocr/process` accepting `multipart/form-data` image stream payloads.
-
-### 3.2 Backend Service Bridge (`backend/services/aiService.js`)
-* **`aiService.js`**: Express-side HTTP client using `axios` and `form-data` to post binary buffers to `http://localhost:8000/ocr/process`. Includes a 12-second timeout and catches connection errors cleanly.
-* **`documentController.js`**: Tries `aiService.processImageWithAI(file)`. If the Python AI microservice returns extracted details, uses them; if unconfigured or offline, seamlessly degrades to local processing without throwing server errors.
+```
+Automated-KYC-System/
+├── docs/
+│   ├── API_DOCUMENTATION.md
+│   ├── PROJECT_ARCHITECTURE.md
+│   └── IMPLEMENTATION_PLAN.md
+├── backend/
+│   ├── logger.js                 <-- Root logger export
+│   ├── logger/                   <-- Centralized Winston Logging Stack
+│   │   ├── logger.js             <-- Core Winston configuration
+│   │   ├── requestLogger.js      <-- Express HTTP request middleware
+│   │   ├── auditLogger.js        <-- Verification status audit logger
+│   │   ├── performanceLogger.js  <-- Component performance timer
+│   │   └── ocrLogger.js          <-- Granular OCR step logger
+│   ├── logs/                     <-- Multi-file runtime log targets
+│   │   ├── application.log
+│   │   ├── audit.log
+│   │   ├── error.log
+│   │   ├── ocr.log
+│   │   ├── performance.log
+│   │   └── requests.log
+│   └── services/
+│       └── aiService.js          <-- Forwards x-trace-id header to FastAPI
+└── ai_service/
+    └── app/
+        ├── utils/
+        │   └── logger.py         <-- Python logging adapter with traceId context
+        └── routers/
+            └── ocr_router.py     <-- Logs request execution times & returns traceId
+```

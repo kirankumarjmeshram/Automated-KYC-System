@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { Container, Form, Button, Card, Alert, ProgressBar } from "react-bootstrap";
 import axios from "axios";
 import VerificationResult from "./VerificationResult";
+import { generateTraceId, logger } from "../utils/logger";
 
 const KycStepupForm = () => {
   const [step, setStep] = useState(1);
@@ -34,6 +35,10 @@ const KycStepupForm = () => {
       return;
     }
 
+    const traceId = generateTraceId();
+    const startTime = Date.now();
+    logger.info("KYC Verification submission started", { traceId, name: formData.name });
+
     const formDataObj = new FormData();
     formDataObj.append("name", formData.name.trim());
     formDataObj.append("aadhaar", formData.aadhaar.trim());
@@ -43,13 +48,33 @@ const KycStepupForm = () => {
 
     try {
       const response = await axios.post("http://localhost:5000/api/verify", formDataObj, {
-        headers: { "Accept": "application/json" },
+        headers: {
+          "Accept": "application/json",
+          "x-trace-id": traceId,
+        },
       });
+
+      const duration = Date.now() - startTime;
+      logger.info("KYC Verification response received", {
+        traceId: response.data.traceId || traceId,
+        status: response.data.status,
+        verified: response.data.verified,
+        duration: `${duration}ms`,
+      });
+
       setVerificationResult(response.data);
     } catch (err) {
+      const duration = Date.now() - startTime;
       if (err.response && err.response.data) {
+        logger.warn("KYC Verification failed with API response", {
+          traceId: err.response.data.traceId || traceId,
+          status: err.response.data.status,
+          error: err.response.data.message || err.response.data.error,
+          duration: `${duration}ms`,
+        });
         setVerificationResult(err.response.data);
       } else {
+        logger.error("Network or unexpected server error", { traceId, error: err.message, duration: `${duration}ms` });
         setError("Network error. Could not connect to verification server.");
       }
     }

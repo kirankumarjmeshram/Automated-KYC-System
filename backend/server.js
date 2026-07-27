@@ -5,6 +5,7 @@ const rateLimit = require("express-rate-limit");
 const env = require("./config/env");
 const connectDB = require("./config/db");
 const logger = require("./logger");
+const requestLogger = require("./logger/requestLogger");
 const errorHandler = require("./middlewares/errorHandler");
 const documentRoutes = require("./routes/documentRoutes");
 
@@ -12,6 +13,9 @@ const app = express();
 
 // Connect to MongoDB Database
 connectDB();
+
+// Mount Request Trace ID & Performance Middleware
+app.use(requestLogger);
 
 // HTTP Security Headers
 app.use(helmet());
@@ -21,14 +25,14 @@ const allowedOrigins = [env.CORS_ORIGIN, "http://localhost:3000", "http://localh
 app.use(
   cors({
     origin: (origin, callback) => {
-      // allow requests with no origin (like mobile apps or curl)
       if (!origin || allowedOrigins.includes(origin)) {
         return callback(null, true);
       }
-      return callback(null, true); // Permissive in dev to avoid CORS blocking frontend
+      return callback(null, true);
     },
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
-    allowedHeaders: ["Content-Type", "Authorization"],
+    allowedHeaders: ["Content-Type", "Authorization", "x-trace-id", "traceid"],
+    exposedHeaders: ["x-trace-id"],
     credentials: true,
   })
 );
@@ -54,6 +58,7 @@ app.get("/health", (req, res) => {
     status: "healthy",
     uptime: process.uptime(),
     timestamp: new Date().toISOString(),
+    traceId: req.traceId,
   });
 });
 
@@ -64,6 +69,7 @@ app.use("/api", documentRoutes);
 app.use("*", (req, res, next) => {
   res.status(404).json({
     success: false,
+    traceId: req.traceId,
     error: `Cannot find endpoint ${req.originalUrl} on this server`,
   });
 });
