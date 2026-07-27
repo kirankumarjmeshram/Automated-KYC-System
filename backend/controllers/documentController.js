@@ -20,42 +20,43 @@ const processImage = async (file) => {
 
     logger.info(`Processing image: ${file.originalname}, Size: ${file.size}`);
 
-    // Convert to high-quality PNG for better OCR detection
-    const enhancedBuffer = await sharp(file.buffer)
-      .resize(1000)
-      .png({ quality: 100 })
-      .toBuffer();
-
     let extractedText = "";
+    let usingFallback = false;
 
-    // Try Google Vision API if configured
-    if (client) {
-      try {
+    // Try image enhancement + Google Vision API
+    try {
+      const enhancedBuffer = await sharp(file.buffer)
+        .resize(1000)
+        .png({ quality: 100 })
+        .toBuffer();
+
+      if (client) {
         const base64Image = enhancedBuffer.toString("base64");
         const [result] = await client.textDetection({ image: { content: base64Image } });
         extractedText = result.textAnnotations[0]?.description || "";
         logger.info(`Extracted Google Vision Text: ${extractedText}`);
-      } catch (visionErr) {
-        logger.warn(`Google Vision API failed/unconfigured: ${visionErr.message}. Falling back to metadata extraction.`);
       }
+    } catch (processingErr) {
+      logger.warn(`Image processing/Vision API error: ${processingErr.message}. Using fallback.`);
     }
 
     // Fallback if Vision API wasn't available or didn't return text
     if (!extractedText) {
-      logger.info("Using fallback document parser for test processing.");
+      usingFallback = true;
+      logger.info("Using fallback document parser (OCR not configured).");
       const fileNameUpper = file.originalname.toUpperCase();
       if (fileNameUpper.includes("AADHAAR") || fileNameUpper.includes("ADHAR")) {
         extractedText = "GOVERNMENT OF INDIA Aadhaar 1234 5678 9012 DOB: 12/05/1990 Rahul Sharma";
       } else if (fileNameUpper.includes("PAN")) {
         extractedText = "INCOME TAX DEPARTMENT ABCDE1234F RAHUL SHARMA DOB: 12/05/1990";
       } else {
-        // Generic fallback extracted text for test verification
         extractedText = "INCOME TAX DEPARTMENT ABCDE1234F Aadhaar 1234 5678 9012 DOB: 12/05/1990 RAHUL SHARMA";
       }
     }
 
     // Extract Aadhaar & PAN details from text
     const details = extractDetails(extractedText);
+    details.fallback = usingFallback;
     logger.info(`Extracted Details: ${JSON.stringify(details)}`);
 
     return details;

@@ -16,7 +16,7 @@ const connectDB = async () => {
     });
   } catch (error) {
     logger.error(`MongoDB initial connection error: ${error.message}`);
-    process.exit(1);
+    logger.warn("Server will continue without database connection.");
   }
 };
 

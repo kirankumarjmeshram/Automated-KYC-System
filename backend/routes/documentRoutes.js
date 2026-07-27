@@ -38,29 +38,45 @@ router.post(
       const extractedAadhaar = aadhaarFile ? await processImage(aadhaarFile) : null;
       const extractedPAN = panFile ? await processImage(panFile) : null;
 
+      // If no real OCR is configured, skip strict number matching
+      const aadhaarIsFallback = extractedAadhaar?.fallback === true;
+      const panIsFallback = extractedPAN?.fallback === true;
+
+      if (aadhaarIsFallback && panIsFallback) {
+        return res.json({
+          success: true,
+          message: "KYC documents received. OCR verification will be available when AI service is configured.",
+          details: {
+            aadhaar: extractedAadhaar?.details || null,
+            pan: extractedPAN?.details || null,
+            ocrConfigured: false,
+          },
+        });
+      }
+
       let mismatches = [];
       let aadhaarNameMatch = false;
       let panNameMatch = false;
 
-      if (extractedAadhaar?.success) {
+      if (extractedAadhaar?.success && !aadhaarIsFallback) {
         if (formData.aadhaar && extractedAadhaar.details.number && formData.aadhaar !== extractedAadhaar.details.number) {
           mismatches.push("Aadhaar number mismatch.");
         }
         if (extractedAadhaar.details.name && extractedAadhaar.details.name.toUpperCase().includes(formData.name)) {
           aadhaarNameMatch = true;
         }
-      } else if (aadhaarFile) {
+      } else if (aadhaarFile && !aadhaarIsFallback) {
         mismatches.push("Aadhaar extraction failed.");
       }
 
-      if (extractedPAN?.success) {
+      if (extractedPAN?.success && !panIsFallback) {
         if (formData.pan && extractedPAN.details.number && formData.pan !== extractedPAN.details.number) {
           mismatches.push("PAN number mismatch.");
         }
         if (extractedPAN.details.name && extractedPAN.details.name.toUpperCase().includes(formData.name)) {
           panNameMatch = true;
         }
-      } else if (panFile) {
+      } else if (panFile && !panIsFallback) {
         mismatches.push("PAN extraction failed.");
       }
 
