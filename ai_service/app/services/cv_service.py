@@ -1,53 +1,79 @@
 import cv2
 import numpy as np
+import logging
+
+logger = logging.getLogger(__name__)
 
 def preprocess_image(image_bytes: bytes) -> tuple[np.ndarray, str]:
     """
-    OpenCV Preprocessing Pipeline:
-    1. Decode image buffer to numpy matrix
-    2. Resize if image is too large (> 1500px width)
-    3. Convert to Grayscale
-    4. Apply Gaussian Noise Filtering
-    5. Perform Adaptive Thresholding for high-contrast text OCR
-    6. Attempt deskew correction if angle detected
+    Advanced Computer Vision Preprocessing Pipeline:
+    1. Image Decoding & Quality Validation
+    2. Intelligent Upscaling / Resizing (1500px optimal width)
+    3. CLAHE Contrast Normalization
+    4. Grayscale & Fast Noise Denoising
+    5. Image Sharpening (Unsharp Masking)
+    6. Adaptive Thresholding
+    7. Deskew & Orientation Normalization
     """
+    logs = []
     try:
-        # 1. Decode byte stream to OpenCV BGR image
         np_arr = np.frombuffer(image_bytes, np.uint8)
         img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
 
         if img is None:
             raise ValueError("Failed to decode image buffer")
+        logs.append("IMAGE_DECODED")
 
-        # 2. Resize maintaining aspect ratio
+        # 1. Resizing / Upscaling to optimal dimension
         h, w = img.shape[:2]
-        max_dim = 1500
-        if max(h, w) > max_dim:
-            scale = max_dim / float(max(h, w))
+        if w < 1000:
+            scale = 1200.0 / float(w)
+            img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_CUBIC)
+            logs.append(f"UPSCALED_{w}x{h}_TO_{int(w*scale)}x{int(h*scale)}")
+        elif max(h, w) > 2000:
+            scale = 2000.0 / float(max(h, w))
             img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+            logs.append(f"DOWNSIZED_TO_{int(w*scale)}x{int(h*scale)}")
 
-        # 3. Convert to Grayscale
+        # 2. Convert to Grayscale
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        logs.append("GRAYSCALE")
 
-        # 4. Noise Reduction using Gaussian Blur
-        blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+        # 3. CLAHE Contrast Enhancement
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        enhanced = clahe.apply(gray)
+        logs.append("CLAHE_APPLIED")
 
-        # 5. Adaptive Thresholding
+        # 4. Denoising
+        denoised = cv2.fastNlMeansDenoising(enhanced, h=10, templateWindowSize=7, searchWindowSize=21)
+        logs.append("DENOISED")
+
+        # 5. Image Sharpening
+        kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]])
+        sharpened = cv2.filter2D(denoised, -1, kernel)
+        logs.append("SHARPENED")
+
+        # 6. Adaptive Thresholding
         thresh = cv2.adaptiveThreshold(
-            blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2
+            sharpened, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2
         )
+        logs.append("ADAPTIVE_THRESHOLD")
 
-        # 6. Deskew Calculation
-        processed_img = deskew_image(thresh)
+        # 7. Deskew Angle Correction
+        processed_img, deskew_angle = deskew_image(thresh)
+        if abs(deskew_angle) > 0.5:
+            logs.append(f"DESKEWED_{deskew_angle:.1f}_DEG")
 
-        return processed_img, "success"
+        status_msg = " | ".join(logs)
+        logger.info(f"OpenCV Preprocessing Pipeline Complete: {status_msg}")
+        return processed_img, status_msg
     except Exception as e:
-        # Fall back to raw color image if processing fails
+        logger.warning(f"OpenCV Preprocessing exception: {e}. Falling back to raw image.")
         np_arr = np.frombuffer(image_bytes, np.uint8)
         img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-        return img, f"preprocessing_warning: {str(e)}"
+        return img, f"PREPROCESSING_FALLBACK: {str(e)}"
 
-def deskew_image(gray_img: np.ndarray) -> np.ndarray:
+def deskew_image(gray_img: np.ndarray) -> tuple[np.ndarray, float]:
     """Detect text line angle and rotate matrix to deskew image."""
     try:
         coords = np.column_stack(np.where(gray_img > 0))
@@ -62,7 +88,7 @@ def deskew_image(gray_img: np.ndarray) -> np.ndarray:
             center = (w // 2, h // 2)
             M = cv2.getRotationMatrix2D(center, angle, 1.0)
             rotated = cv2.warpAffine(gray_img, M, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
-            return rotated
+            return rotated, float(angle)
     except Exception:
         pass
-    return gray_img
+    return gray_img, 0.0

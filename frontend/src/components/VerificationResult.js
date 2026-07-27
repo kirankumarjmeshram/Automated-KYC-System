@@ -1,7 +1,9 @@
-import React from "react";
-import { Alert, Badge, Card, Row, Col, Table, ListGroup, Accordion } from "react-bootstrap";
+import React, { useState } from "react";
+import { Alert, Badge, Card, Row, Col, Table, ListGroup, Button, Collapse } from "react-bootstrap";
 
 const VerificationResult = ({ data }) => {
+  const [showDebug, setShowDebug] = useState(false);
+
   if (!data) return null;
 
   const status = data.status || "REJECTED";
@@ -9,7 +11,6 @@ const VerificationResult = ({ data }) => {
   const traceId = data.traceId || "";
   const processingTimeMs = data.processingTimeMs || 0;
   const confidence = data.confidence || { overall: 0, aadhaar: 0, pan: 0 };
-  const summary = data.summary || {};
   const submittedData = data.submittedData || {};
   const ocrData = data.ocrData || {};
   const comparison = data.comparison || {};
@@ -18,8 +19,8 @@ const VerificationResult = ({ data }) => {
   const errors = data.errors || [];
   const warnings = data.warnings || [];
   const recommendations = data.recommendations || [];
+  const debug = data.debug || null;
 
-  // Determine Alert variant
   let alertVariant = "danger";
   if (isVerified && status === "VERIFIED") alertVariant = "success";
   else if (status === "OCR_UNAVAILABLE" || status === "MANUAL_REVIEW") alertVariant = "warning";
@@ -27,7 +28,7 @@ const VerificationResult = ({ data }) => {
 
   return (
     <div className="mt-4">
-      {/* 1. Header Banner */}
+      {/* 1. Header Summary Banner */}
       <Alert variant={alertVariant} className="border-0 shadow-sm mb-4">
         <Alert.Heading className="d-flex align-items-center justify-content-between flex-wrap">
           <div className="d-flex align-items-center me-2">
@@ -54,7 +55,7 @@ const VerificationResult = ({ data }) => {
         </Alert.Heading>
         <p className="mb-1">{data.message}</p>
         <div className="d-flex justify-content-between text-muted small mt-2 pt-2 border-top">
-          <span>Processing Time: <strong>{processingTimeMs} ms</strong></span>
+          <span>Processing Duration: <strong>{processingTimeMs} ms</strong></span>
           <span>Overall Confidence: <strong>{confidence.overall}%</strong></span>
           <span>Timestamp: <strong>{data.verificationTime ? new Date(data.verificationTime).toLocaleTimeString() : "N/A"}</strong></span>
         </div>
@@ -113,7 +114,7 @@ const VerificationResult = ({ data }) => {
         </Card.Body>
       </Card>
 
-      {/* 3. Submitted vs OCR Field Comparison Table */}
+      {/* 3. Submitted vs Extracted Field Comparison Table */}
       <Card className="shadow-sm border-0 mb-4">
         <Card.Header className="bg-light fw-bold">Submitted Data vs Extracted OCR Comparison</Card.Header>
         <Card.Body className="p-0">
@@ -134,9 +135,9 @@ const VerificationResult = ({ data }) => {
                 <td>{ocrData.aadhaar?.name || "—"}</td>
                 <td>{ocrData.pan?.name || "—"}</td>
                 <td>
-                  {comparison.aadhaar?.name?.matched || comparison.pan?.name?.matched ? (
+                  {comparison.aadhaar?.name?.matches?.firstName || comparison.pan?.name?.matches?.firstName ? (
                     <Badge bg="success">
-                      ✓ Match ({Math.max(comparison.aadhaar?.name?.similarity || 0, comparison.pan?.name?.similarity || 0)}%)
+                      ✓ Match ({Math.max(comparison.aadhaar?.name?.similarity?.overall || 0, comparison.pan?.name?.similarity?.overall || 0)}%)
                     </Badge>
                   ) : (
                     <Badge bg="danger">❌ Mismatch</Badge>
@@ -178,88 +179,32 @@ const VerificationResult = ({ data }) => {
         </Card.Body>
       </Card>
 
-      {/* 4. Extracted Document Metadata */}
-      <Row className="g-4 mb-4">
-        {ocrData.aadhaar && (
-          <Col md={6}>
-            <Card className="shadow-sm border-0 h-100">
-              <Card.Header className="bg-primary text-white d-flex justify-content-between align-items-center">
-                <span>Aadhaar Card Extraction</span>
-                <Badge bg="light" text="dark">{confidence.aadhaar}% Confidence</Badge>
-              </Card.Header>
-              <Card.Body>
-                <p><strong>Name:</strong> {ocrData.aadhaar.name || "N/A"}</p>
-                <p><strong>Aadhaar Number:</strong> {ocrData.aadhaar.number || "N/A"}</p>
-                <p><strong>DOB:</strong> {ocrData.aadhaar.dob || "N/A"}</p>
-                <p className="mb-0"><strong>Address:</strong> {ocrData.aadhaar.address || "N/A"}</p>
-              </Card.Body>
-            </Card>
-          </Col>
-        )}
-        {ocrData.pan && (
-          <Col md={6}>
-            <Card className="shadow-sm border-0 h-100">
-              <Card.Header className="bg-success text-white d-flex justify-content-between align-items-center">
-                <span>PAN Card Extraction</span>
-                <Badge bg="light" text="dark">{confidence.pan}% Confidence</Badge>
-              </Card.Header>
-              <Card.Body>
-                <p><strong>Holder Name:</strong> {ocrData.pan.name || "N/A"}</p>
-                {ocrData.pan.father_name && <p><strong>Father's Name:</strong> {ocrData.pan.father_name}</p>}
-                <p><strong>PAN Number:</strong> {ocrData.pan.number || "N/A"}</p>
-                <p className="mb-0"><strong>DOB:</strong> {ocrData.pan.dob || "N/A"}</p>
-              </Card.Body>
-            </Card>
-          </Col>
-        )}
-      </Row>
-
-      {/* 5. Warnings, Errors & Recommendations */}
-      {(errors.length > 0 || warnings.length > 0 || recommendations.length > 0) && (
+      {/* 4. Structured Recommendations Engine Output */}
+      {recommendations.length > 0 && (
         <Card className="shadow-sm border-0 mb-4">
-          <Card.Header className="bg-light fw-bold">Diagnostic Errors & Actionable Recommendations</Card.Header>
-          <Card.Body>
-            {errors.length > 0 && (
-              <div className="mb-3">
-                <h6 className="text-danger fw-bold">Validation Errors:</h6>
-                <ListGroup variant="flush">
-                  {errors.map((err, idx) => (
-                    <ListGroup.Item key={idx} className="text-danger px-0 py-1 bg-transparent">
-                      • {err.reason || err.message || JSON.stringify(err)}
-                    </ListGroup.Item>
-                  ))}
-                </ListGroup>
-              </div>
-            )}
-            {warnings.length > 0 && (
-              <div className="mb-3">
-                <h6 className="text-warning fw-bold">System Warnings:</h6>
-                <ListGroup variant="flush">
-                  {warnings.map((warn, idx) => (
-                    <ListGroup.Item key={idx} className="text-warning px-0 py-1 bg-transparent">
-                      • {warn}
-                    </ListGroup.Item>
-                  ))}
-                </ListGroup>
-              </div>
-            )}
-            {recommendations.length > 0 && (
-              <div>
-                <h6 className="text-info fw-bold">Recommendations:</h6>
-                <ListGroup variant="flush">
-                  {recommendations.map((rec, idx) => (
-                    <ListGroup.Item key={idx} className="text-info px-0 py-1 bg-transparent">
-                      • {rec}
-                    </ListGroup.Item>
-                  ))}
-                </ListGroup>
-              </div>
-            )}
+          <Card.Header className="bg-light fw-bold text-dark">Intelligent Recommendation Engine Output</Card.Header>
+          <Card.Body className="p-0">
+            <ListGroup variant="flush">
+              {recommendations.map((rec, idx) => (
+                <ListGroup.Item key={idx} className="p-3">
+                  <div className="d-flex align-items-center justify-content-between mb-1">
+                    <span className="fw-bold fs-6">{rec.title}</span>
+                    <Badge bg={rec.severity === "danger" ? "danger" : rec.severity === "warning" ? "warning" : "info"}>
+                      {rec.code}
+                    </Badge>
+                  </div>
+                  <p className="mb-1 text-secondary">{rec.description}</p>
+                  <div className="text-dark small">
+                    <strong>Recommended Action:</strong> {rec.action}
+                  </div>
+                </ListGroup.Item>
+              ))}
+            </ListGroup>
           </Card.Body>
         </Card>
       )}
 
-      {/* 6. Audit Timeline */}
+      {/* 5. Audit Timeline */}
       {timeline.length > 0 && (
         <Card className="shadow-sm border-0 mb-4">
           <Card.Header className="bg-light fw-bold">Audit Timeline</Card.Header>
@@ -273,6 +218,25 @@ const VerificationResult = ({ data }) => {
               ))}
             </div>
           </Card.Body>
+        </Card>
+      )}
+
+      {/* 6. Development Debug Panel */}
+      {debug && (
+        <Card className="shadow-sm border-0 mb-4 border-warning">
+          <Card.Header className="bg-warning text-dark d-flex justify-content-between align-items-center">
+            <span className="fw-bold">🛠️ Developer Diagnostics Payload (NODE_ENV=development)</span>
+            <Button size="sm" variant="outline-dark" onClick={() => setShowDebug(!showDebug)}>
+              {showDebug ? "Hide Debug Payload" : "View Debug Payload"}
+            </Button>
+          </Card.Header>
+          <Collapse in={showDebug}>
+            <Card.Body className="bg-dark text-light p-3">
+              <pre className="text-light mb-0" style={{ fontSize: "0.8rem", maxHeight: "350px", overflowY: "auto" }}>
+                {JSON.stringify(debug, null, 2)}
+              </pre>
+            </Card.Body>
+          </Collapse>
         </Card>
       )}
     </div>

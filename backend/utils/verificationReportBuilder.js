@@ -1,9 +1,10 @@
-const { calculateNameSimilarity } = require("./fuzzyMatch");
+const { matchNames } = require("./nameMatcher");
+const { generateRecommendations } = require("./recommendationEngine");
 const VerificationStatus = require("../constants/verificationStatus");
 
 /**
  * Enterprise Verification Report Builder
- * Generates a standardized, comprehensive verification report for all KYC outcomes.
+ * Generates a standardized, comprehensive verification report with Decision, Recommendation & Debug Engines.
  */
 function buildVerificationReport({
   traceId,
@@ -28,47 +29,66 @@ function buildVerificationReport({
   const aadhaarSub = submittedData.aadhaar || "";
   const panSub = submittedData.pan || "";
 
-  // 1. Process Aadhaar Field Comparison & Confidence
+  // 1. Process Aadhaar Name Matching via Enterprise Name Engine
   const aadhaarDetails = extractedAadhaar?.details || null;
-  const aadhaarStatus = !aadhaarDetails
-    ? (extractedAadhaar?.status || "NOT_UPLOADED")
-    : (mismatches.some((m) => m.includes("Aadhaar")) ? VerificationStatus.REJECTED : VerificationStatus.VERIFIED);
-
-  let aadhaarNameMatch = false;
-  let aadhaarNameSim = 0;
+  let aadhaarNameMatchResult = null;
   let aadhaarNumberMatch = false;
 
   if (aadhaarDetails) {
     if (aadhaarDetails.name && nameSub) {
-      aadhaarNameSim = calculateNameSimilarity(nameSub, aadhaarDetails.name);
-      aadhaarNameMatch = aadhaarNameSim >= 65;
+      aadhaarNameMatchResult = matchNames(nameSub, aadhaarDetails.name, extractedAadhaar.confidence ? Math.round(extractedAadhaar.confidence * 100) : 95);
     }
     if (aadhaarDetails.number && aadhaarSub) {
       aadhaarNumberMatch = aadhaarSub === aadhaarDetails.number.replace(/\s/g, "");
     }
   }
 
-  // 2. Process PAN Field Comparison & Confidence
+  // 2. Process PAN Name Matching via Enterprise Name Engine
   const panDetails = extractedPAN?.details || null;
-  const panStatus = !panDetails
-    ? (extractedPAN?.status || "NOT_UPLOADED")
-    : (mismatches.some((m) => m.includes("PAN")) ? VerificationStatus.REJECTED : VerificationStatus.VERIFIED);
-
-  let panNameMatch = false;
-  let panNameSim = 0;
+  let panNameMatchResult = null;
   let panNumberMatch = false;
 
   if (panDetails) {
     if (panDetails.name && nameSub) {
-      panNameSim = calculateNameSimilarity(nameSub, panDetails.name);
-      panNameMatch = panNameSim >= 65;
+      panNameMatchResult = matchNames(nameSub, panDetails.name, extractedPAN.confidence ? Math.round(extractedPAN.confidence * 100) : 95);
     }
     if (panDetails.number && panSub) {
       panNumberMatch = panSub === panDetails.number;
     }
   }
 
-  // 3. Compute Confidence Scores
+  // Determine Document Statuses
+  let aadhaarStatus = "NOT_UPLOADED";
+  if (extractedAadhaar) {
+    if (extractedAadhaar.status === VerificationStatus.OCR_UNAVAILABLE) aadhaarStatus = VerificationStatus.OCR_UNAVAILABLE;
+    else if (extractedAadhaar.status === VerificationStatus.OCR_FAILED) aadhaarStatus = VerificationStatus.OCR_FAILED;
+    else if (aadhaarNameMatchResult) {
+      if (aadhaarNameMatchResult.decision === "REJECTED" || (aadhaarSub && !aadhaarNumberMatch)) {
+        aadhaarStatus = VerificationStatus.REJECTED;
+      } else if (aadhaarNameMatchResult.decision === "MANUAL_REVIEW") {
+        aadhaarStatus = VerificationStatus.MANUAL_REVIEW;
+      } else {
+        aadhaarStatus = VerificationStatus.VERIFIED;
+      }
+    }
+  }
+
+  let panStatus = "NOT_UPLOADED";
+  if (extractedPAN) {
+    if (extractedPAN.status === VerificationStatus.OCR_UNAVAILABLE) panStatus = VerificationStatus.OCR_UNAVAILABLE;
+    else if (extractedPAN.status === VerificationStatus.OCR_FAILED) panStatus = VerificationStatus.OCR_FAILED;
+    else if (panNameMatchResult) {
+      if (panNameMatchResult.decision === "REJECTED" || (panSub && !panNumberMatch)) {
+        panStatus = VerificationStatus.REJECTED;
+      } else if (panNameMatchResult.decision === "MANUAL_REVIEW") {
+        panStatus = VerificationStatus.MANUAL_REVIEW;
+      } else {
+        panStatus = VerificationStatus.VERIFIED;
+      }
+    }
+  }
+
+  // Compute Confidence Scores
   const aadhaarConf = extractedAadhaar?.confidence ? Math.round(extractedAadhaar.confidence * 100) : (aadhaarDetails ? 95.0 : 0.0);
   const panConf = extractedPAN?.confidence ? Math.round(extractedPAN.confidence * 100) : (panDetails ? 94.0 : 0.0);
   
@@ -78,35 +98,27 @@ function buildVerificationReport({
   if (panConf > 0) { confSum += panConf; validConfCount++; }
   const overallConf = validConfCount > 0 ? Number((confSum / validConfCount).toFixed(1)) : 0.0;
 
-  // 4. Determine Warnings and Recommendations
+  // Aggregate Warnings & Recommendations
   const finalWarnings = [...pipelineWarnings];
-  const finalRecommendations = [...recommendations];
   const finalErrors = [...pipelineErrors];
 
-  if (status === VerificationStatus.OCR_UNAVAILABLE) {
-    finalWarnings.push("AI OCR microservice is unconfigured or offline.");
-    finalRecommendations.push("Start AI microservice on port 8000 for automated OCR verification.");
-  } else if (status === VerificationStatus.OCR_FAILED) {
-    finalErrors.push({
-      document: "GENERAL",
-      field: "IMAGE_QUALITY",
-      reason: "Could not extract legible identity text from uploaded files.",
-    });
-    finalRecommendations.push("Upload clear, high-resolution document images under good lighting.");
-    finalRecommendations.push("Ensure full document card is visible without glare or heavy rotation.");
-  } else if (status === VerificationStatus.REJECTED) {
-    mismatches.forEach((m) => {
-      finalErrors.push({
-        document: m.includes("Aadhaar") ? "Aadhaar" : "PAN",
-        field: m.includes("name") ? "name" : "number",
-        reason: m,
-      });
-    });
-    finalRecommendations.push("Re-check submitted name and numbers against physical identity cards.");
-  }
+  if (aadhaarNameMatchResult?.warnings) finalWarnings.push(...aadhaarNameMatchResult.warnings);
+  if (panNameMatchResult?.warnings) finalWarnings.push(...panNameMatchResult.warnings);
 
-  // 5. Construct Enterprise Report Payload
-  return {
+  // Generate Structured Recommendations
+  const structuredRecs = generateRecommendations({
+    status,
+    ocrConfidence: overallConf,
+    extractedAadhaar,
+    extractedPAN,
+    mismatches,
+    nameMatchResult: panNameMatchResult || aadhaarNameMatchResult,
+  });
+
+  const simpleRecStrings = structuredRecs.map((r) => `${r.title}: ${r.action}`);
+
+  // Construct Base Report Payload
+  const report = {
     success: verified || status === VerificationStatus.OCR_UNAVAILABLE,
     traceId: traceId || "internal-trace",
     status,
@@ -121,7 +133,7 @@ function buildVerificationReport({
       panVerified: panStatus === VerificationStatus.VERIFIED,
       faceVerified: false,
       livenessVerified: false,
-      manualReviewRequired: status === VerificationStatus.MANUAL_REVIEW || status === VerificationStatus.OCR_FAILED,
+      manualReviewRequired: status === VerificationStatus.MANUAL_REVIEW || aadhaarStatus === VerificationStatus.MANUAL_REVIEW || panStatus === VerificationStatus.MANUAL_REVIEW,
     },
 
     submittedData: {
@@ -156,11 +168,14 @@ function buildVerificationReport({
 
     comparison: {
       aadhaar: {
-        name: {
-          submitted: nameSub,
-          ocr: aadhaarDetails?.name || "",
-          matched: aadhaarNameMatch,
-          similarity: aadhaarNameSim,
+        name: aadhaarNameMatchResult || {
+          normalizedSubmitted: nameSub.toUpperCase(),
+          normalizedOCR: (aadhaarDetails?.name || "").toUpperCase(),
+          matches: { firstName: false, middleName: false, lastName: false },
+          similarity: { overall: 0, firstName: 0, middleName: 0, lastName: 0, tokenAverage: 0 },
+          confidence: 0,
+          reason: "No Aadhaar name extracted",
+          decision: "REJECTED",
         },
         number: {
           submitted: aadhaarSub,
@@ -173,11 +188,14 @@ function buildVerificationReport({
         addressMatch: Boolean(aadhaarDetails?.address),
       },
       pan: {
-        name: {
-          submitted: nameSub,
-          ocr: panDetails?.name || "",
-          matched: panNameMatch,
-          similarity: panNameSim,
+        name: panNameMatchResult || {
+          normalizedSubmitted: nameSub.toUpperCase(),
+          normalizedOCR: (panDetails?.name || "").toUpperCase(),
+          matches: { firstName: false, middleName: false, lastName: false },
+          similarity: { overall: 0, firstName: 0, middleName: 0, lastName: 0, tokenAverage: 0 },
+          confidence: 0,
+          reason: "No PAN name extracted",
+          decision: "REJECTED",
         },
         number: {
           submitted: panSub,
@@ -198,11 +216,11 @@ function buildVerificationReport({
     documents: {
       aadhaar: {
         status: aadhaarStatus,
-        reason: aadhaarStatus === VerificationStatus.VERIFIED ? "Matched" : (mismatches.find((m) => m.includes("Aadhaar")) || "Extraction Result"),
+        reason: aadhaarNameMatchResult?.reason || "Aadhaar Extraction",
       },
       pan: {
         status: panStatus,
-        reason: panStatus === VerificationStatus.VERIFIED ? "Matched" : (mismatches.find((m) => m.includes("PAN")) || "Extraction Result"),
+        reason: panNameMatchResult?.reason || "PAN Extraction",
       },
     },
 
@@ -217,7 +235,8 @@ function buildVerificationReport({
 
     errors: finalErrors,
     warnings: finalWarnings,
-    recommendations: finalRecommendations,
+    recommendations: structuredRecs,
+    simpleRecommendations: simpleRecStrings,
 
     timeline: timeline.length > 0 ? timeline : [
       { status: VerificationStatus.UPLOADED, timestamp: isoTime },
@@ -234,6 +253,22 @@ function buildVerificationReport({
       officerComments: null,
     },
   };
+
+  // Include Debug Payload in Development or when DEBUG=true
+  if (process.env.NODE_ENV === "development" || process.env.DEBUG === "true") {
+    report.debug = {
+      rawPaddleOCR: extractedPAN?.raw_paddle || extractedAadhaar?.raw_paddle || "N/A",
+      rawEasyOCR: extractedPAN?.raw_easy || extractedAadhaar?.raw_easy || "N/A",
+      mergedOCR: extractedPAN?.raw_text || extractedAadhaar?.raw_text || "N/A",
+      documentType: extractedPAN?.details?.type || extractedAadhaar?.details?.type || "Unknown",
+      parserOutput: extractedPAN?.details || extractedAadhaar?.details || null,
+      validatedOutput: report.ocrData,
+      comparison: report.comparison,
+      confidence: report.confidence,
+    };
+  }
+
+  return report;
 }
 
 module.exports = { buildVerificationReport };

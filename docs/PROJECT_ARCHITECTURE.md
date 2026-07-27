@@ -11,54 +11,24 @@ The **Automated KYC System** is a production-grade digital Know Your Customer (K
 * **Database**: MongoDB Atlas (Mongoose ODM)
 * **Cloud Storage & Auth (Target Architecture)**: AWS S3, Clerk Authentication
 
-```
-               ┌──────────────────────────────────────────┐
-               │           React Frontend Client          │
-               │            (Port 3000 / Vercel)          │
-               └────────────────────┬─────────────────────┘
-                                    │
-                         HTTP REST / Multipart (x-trace-id)
-                                    │
-               ┌────────────────────▼─────────────────────┐
-               │           Express Backend API            │
-               │            (Port 5000 / Render)          │
-               └─────────┬──────────────────────┬─────────┘
-                         │                      │
-        MongoDB Driver   │                      │ HTTP RPC Stream (x-trace-id)
-                         │                      │ POST http://localhost:8000/ocr/process
-   ┌─────────────────────▼──────┐   ┌───────────▼─────────────────────┐
-   │       MongoDB Atlas        │   │        FastAPI AI Service       │
-   │  (Document Persistence)    │   │      (Port 8000 / Render)       │
-   └────────────────────────────┘   └──────────────────┬──────────────┘
-                                                       │
-                                    ┌──────────────────┴──────────────────┐
-                                    │ OpenCV Preprocessing & Deskew       │
-                                    │ Dual Engine (PaddleOCR / EasyOCR)   │
-                                    │ Gemini LLM Entity Extraction Engine │
-                                    └─────────────────────────────────────┘
-```
-
 ---
 
-## 2. Centralized Logging Architecture & Trace ID Flow (Phase 2.1)
+## 2. Enterprise Name Matching Engine (`backend/utils/nameMatcher.js`)
 
-### 2.1 Trace ID Lifecycle Across Service Boundaries
-Every KYC submission is assigned a unique UUID `traceId` (`8e7d4d74-b8dd-4cf2-9dd4-b0b51f5ef6af`) that propagates across all service tiers:
+The **Enterprise Name Matching Engine** serves as the single source of truth for comparing person names across all KYC documents (Aadhaar, PAN, Passport, Driving Licence, Voter ID, and future documents).
 
-```
-[React Frontend] ── x-trace-id: UUID ──> [Express API Gateway] ── x-trace-id: UUID ──> [FastAPI AI Service]
-       ▲                                         │                                            │
-       │                                         ▼                                            ▼
-       └──────── traceId in JSON Response ───────┴────── Logged in backend/logs/ ─────────────┘
-```
+### 2.1 Normalization & Tokenization Pipeline
+1. **Normalization**: Converts to uppercase, strips accents/Unicode diacritics, removes dots (`J.` ➔ `J`), commas, dashes, and collapses multiple spaces.
+2. **Tokenization**: Extracts `firstName`, `middleNames` (array), `lastName`, and `tokens` array.
 
-### 2.2 Backend Multi-File Winston Logger Hierarchy (`backend/logs/`)
-1. **`requests.log`**: HTTP request duration, method, path, IP, user-agent, status code, and `TraceID`.
-2. **`audit.log`**: Status transition timeline events (`UPLOADED` -> `OCR_PROCESSING` -> `OCR_COMPLETED` -> `VERIFIED` / `REJECTED`).
-3. **`ocr.log`**: Granular OCR extraction steps (`PADDLE_SUCCESS`, `EASYOCR_SUCCESS`, `GEMINI_COMPLETED`, `FIELD_EXTRACTION`).
-4. **`performance.log`**: Timing metrics for OpenCV preprocessing, AI RPC call, data matching, and total duration.
-5. **`application.log`**: General application execution logs.
-6. **`error.log`**: Formatted error stack traces and failure metadata.
+### 2.2 Decision Rules & Logic
+* **Rule 1**: First name matches, Last name matches, Middle differs ➔ `VERIFIED` (Warning: "Middle name mismatch.")
+* **Rule 2**: First matches, Last matches, Middle initial (`J` vs `JAGESHWAR`) ➔ `VERIFIED` (Reason: "Middle name abbreviated on document.")
+* **Rule 3**: First matches, Last matches, Middle missing on OCR ➔ `VERIFIED` (Reason: "Middle name omitted on document.")
+* **Rule 4**: First matches, Last missing on OCR ➔ `MANUAL_REVIEW`
+* **Rule 5**: Only surname matches ➔ `REJECTED`
+* **Rule 6**: Only first name matches ➔ `MANUAL_REVIEW`
+* **Rule 7**: Nothing matches ➔ `REJECTED`
 
 ---
 
@@ -71,26 +41,15 @@ Automated-KYC-System/
 │   ├── PROJECT_ARCHITECTURE.md
 │   └── IMPLEMENTATION_PLAN.md
 ├── backend/
-│   ├── logger.js                 <-- Root logger export
-│   ├── logger/                   <-- Centralized Winston Logging Stack
-│   │   ├── logger.js             <-- Core Winston configuration
-│   │   ├── requestLogger.js      <-- Express HTTP request middleware
-│   │   ├── auditLogger.js        <-- Verification status audit logger
-│   │   ├── performanceLogger.js  <-- Component performance timer
-│   │   └── ocrLogger.js          <-- Granular OCR step logger
-│   ├── logs/                     <-- Multi-file runtime log targets
-│   │   ├── application.log
-│   │   ├── audit.log
-│   │   ├── error.log
-│   │   ├── ocr.log
-│   │   ├── performance.log
-│   │   └── requests.log
-│   └── services/
-│       └── aiService.js          <-- Forwards x-trace-id header to FastAPI
+│   ├── utils/
+│   │   ├── nameMatcher.js                 <-- Reusable Enterprise Name Engine
+│   │   └── verificationReportBuilder.js   <-- Enterprise Verification Report Generator
+│   ├── logger/                            <-- Centralized Winston Logging Stack
+│   └── logs/                              <-- Multi-file runtime log targets
 └── ai_service/
     └── app/
         ├── utils/
-        │   └── logger.py         <-- Python logging adapter with traceId context
+        │   └── logger.py
         └── routers/
-            └── ocr_router.py     <-- Logs request execution times & returns traceId
+            └── ocr_router.py
 ```

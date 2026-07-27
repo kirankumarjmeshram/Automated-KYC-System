@@ -4,7 +4,7 @@ const { processImage } = require("../controllers/documentController");
 const VerificationStatus = require("../constants/verificationStatus");
 const logger = require("../logger");
 const { logAudit, logOcrStep, logPerformance } = require("../logger");
-const { calculateNameSimilarity } = require("../utils/fuzzyMatch");
+const { matchNames } = require("../utils/nameMatcher");
 const { buildVerificationReport } = require("../utils/verificationReportBuilder");
 
 const router = express.Router();
@@ -134,11 +134,12 @@ router.post(
 
       addTimelineStep(VerificationStatus.OCR_COMPLETED);
 
-      // Evaluate field matching
+      // Evaluate field matching using Enterprise Name Engine
       addTimelineStep("DATA_MATCHING");
       logAudit({ traceId, oldStatus: VerificationStatus.OCR_PROCESSING, newStatus: VerificationStatus.OCR_COMPLETED, event: "DATA_MATCHING" });
 
       let mismatches = [];
+      let manualReviewRequired = false;
 
       // Validate Aadhaar Details
       if (extractedAadhaar?.details) {
@@ -146,10 +147,13 @@ router.post(
           mismatches.push("Aadhaar number mismatch.");
         }
         if (extractedAadhaar.details.name) {
-          const aadhaarSim = calculateNameSimilarity(formData.name, extractedAadhaar.details.name);
-          logOcrStep({ traceId, step: "AADHAAR_NAME_SIMILARITY", confidence: aadhaarSim, message: `Submitted="${formData.name}" OCR="${extractedAadhaar.details.name}"` });
-          if (aadhaarSim < 65) {
-            mismatches.push("Aadhaar holder name mismatch.");
+          const aadhaarMatch = matchNames(formData.name, extractedAadhaar.details.name, extractedAadhaar.confidence ? Math.round(extractedAadhaar.confidence * 100) : 95);
+          logOcrStep({ traceId, step: "AADHAAR_NAME_MATCH", confidence: aadhaarMatch.confidence, message: `Submitted="${formData.name}" OCR="${extractedAadhaar.details.name}" Decision=${aadhaarMatch.decision}` });
+          
+          if (aadhaarMatch.decision === "REJECTED") {
+            mismatches.push(`Aadhaar name mismatch: ${aadhaarMatch.reason}`);
+          } else if (aadhaarMatch.decision === "MANUAL_REVIEW") {
+            manualReviewRequired = true;
           }
         }
       }
@@ -160,10 +164,13 @@ router.post(
           mismatches.push("PAN number mismatch.");
         }
         if (extractedPAN.details.name) {
-          const panSim = calculateNameSimilarity(formData.name, extractedPAN.details.name);
-          logOcrStep({ traceId, step: "PAN_NAME_SIMILARITY", confidence: panSim, message: `Submitted="${formData.name}" OCR="${extractedPAN.details.name}"` });
-          if (panSim < 65) {
-            mismatches.push("PAN card holder name mismatch.");
+          const panMatch = matchNames(formData.name, extractedPAN.details.name, extractedPAN.confidence ? Math.round(extractedPAN.confidence * 100) : 95);
+          logOcrStep({ traceId, step: "PAN_NAME_MATCH", confidence: panMatch.confidence, message: `Submitted="${formData.name}" OCR="${extractedPAN.details.name}" Decision=${panMatch.decision}` });
+
+          if (panMatch.decision === "REJECTED") {
+            mismatches.push(`PAN name mismatch: ${panMatch.reason}`);
+          } else if (panMatch.decision === "MANUAL_REVIEW") {
+            manualReviewRequired = true;
           }
         }
       }
@@ -187,6 +194,27 @@ router.post(
         });
 
         return res.status(400).json(report);
+      }
+
+      if (manualReviewRequired) {
+        addTimelineStep(VerificationStatus.MANUAL_REVIEW);
+        logAudit({ traceId, oldStatus: VerificationStatus.OCR_COMPLETED, newStatus: VerificationStatus.MANUAL_REVIEW, event: "MANUAL_REVIEW_TRIGGERED" });
+        logPerformance({ traceId, operation: "TOTAL_KYC_VERIFY_REQUEST", durationMs: Date.now() - requestStart });
+
+        const report = buildVerificationReport({
+          traceId,
+          status: VerificationStatus.MANUAL_REVIEW,
+          verified: false,
+          message: "Name verification requires compliance officer review.",
+          startTime: requestStart,
+          submittedData: formData,
+          extractedAadhaar,
+          extractedPAN,
+          pipelineWarnings: ["Name matching rule flagged for manual review."],
+          timeline,
+        });
+
+        return res.json(report);
       }
 
       // Case 3: All validations passed!
