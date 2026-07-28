@@ -4,21 +4,37 @@
  * (Aadhaar, PAN, Passport, Driving Licence, Voter ID, etc.)
  */
 
+// Common OCR Noise Words / Garbage Artifacts to filter out during normalization
+const OCR_NOISE_WORDS = new Set([
+  "GF", "DRH", "UIDAI", "INDIA", "GOVT", "GOVERNMENT", "DOB", "MALE", "FEMALE",
+  "SIGNATURE", "YEAR", "QR", "PHOTO", "BHARAT", "SARKAR", "ADDRESS", "PATTA",
+  "DATE", "BIRTH", "FATHER", "MOTHER", "HUSBAND", "NAME", "S/O", "D/O", "W/O", "C/O",
+  "SO", "DO", "WO", "CO", "VID", "CARD", "NUMBER", "UNIQUE", "IDENTIFICATION",
+  "AUTHORITY", "ISSUE", "DOWNLOAD", "INCOME", "TAX", "DEPARTMENT", "PERMANENT",
+  "ACCOUNT", "TNG", "TENN", "HRS", "TNR", "BIGRATURE", "HRT", "HER",
+  "FAT", "TT", "313XY", "313ZR", "H161", "HRCY", "FAFEEZ", "QFERCUT", "QFERCU"
+]);
+
 /**
- * 1. Normalization Pipeline
- * Converts uppercase, collapses whitespace, strips punctuation/dots/special chars, normalizes Unicode.
+ * 1. Robust Name Normalization
+ * Converts to uppercase, removes diacritics, strips punctuation/special chars,
+ * collapses spaces, and filters out common OCR noise words.
  */
 function normalizeName(rawName) {
   if (!rawName || typeof rawName !== "string") return "";
 
-  return rawName
+  const clean = rawName
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "") // Remove Unicode diacritics
     .toUpperCase()
-    .replace(/[\.,\-\/#\$%\^&\*;:{}=\-_`~()]/g, " ") // Replace punctuation & dots with spaces
-    .replace(/[^A-Z\s]/g, "") // Keep only A-Z and spaces
-    .replace(/\s+/g, " ") // Collapse multiple spaces
+    .replace(/[\.,\-\/#\$%\^&\*;:{}=\-_`~()\\@\+\?]/g, " ") // Replace punctuation with space
+    .replace(/[^A-Z\s]/g, " ") // Replace non-A-Z characters with space
+    .replace(/\s+/g, " ")
     .trim();
+
+  // Filter out OCR noise words
+  const tokens = clean.split(" ").filter((t) => t.length > 0 && !OCR_NOISE_WORDS.has(t));
+  return tokens.join(" ");
 }
 
 /**
@@ -31,8 +47,7 @@ function tokenizeName(normalizedName) {
   }
 
   const rawTokens = normalizedName.split(" ").filter(Boolean);
-  
-  // Remove duplicate consecutive tokens
+  // Filter out duplicate consecutive tokens
   const tokens = rawTokens.filter((token, index) => token !== rawTokens[index - 1]);
 
   if (tokens.length === 0) {
@@ -61,7 +76,7 @@ function tokenizeName(normalizedName) {
 }
 
 /**
- * Helper: Levenshtein distance ratio (0 to 100)
+ * Levenshtein Distance Ratio (0 to 100)
  */
 function levenshteinSimilarity(s1, s2) {
   if (!s1 || !s2) return 0;
@@ -79,7 +94,7 @@ function levenshteinSimilarity(s1, s2) {
       if (s1[i - 1] === s2[j - 1]) {
         dp[i][j] = dp[i - 1][j - 1];
       } else {
-        dp[i][j] = 1 + Math.min(dp[i - 1][j], dp[j - 1] ? dp[i][j - 1] : dp[i - 1][j], dp[i - 1][j - 1]);
+        dp[i][j] = 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
       }
     }
   }
@@ -90,29 +105,164 @@ function levenshteinSimilarity(s1, s2) {
 }
 
 /**
- * 3. Matching Engine & Rule Evaluator
- * Evaluates similarity and applies business rules.
+ * Jaro-Winkler Similarity (0 to 100)
  */
-function matchNames(submittedName, ocrName, ocrConfidence = 95) {
+function jaroWinklerSimilarity(s1, s2) {
+  if (!s1 || !s2) return 0;
+  if (s1 === s2) return 100;
+
+  const len1 = s1.length;
+  const len2 = s2.length;
+  const matchWindow = Math.floor(Math.max(len1, len2) / 2) - 1;
+
+  const matches1 = new Array(len1).fill(false);
+  const matches2 = new Array(len2).fill(false);
+
+  let matchCount = 0;
+  for (let i = 0; i < len1; i++) {
+    const start = Math.max(0, i - matchWindow);
+    const end = Math.min(i + matchWindow + 1, len2);
+    for (let j = start; j < end; j++) {
+      if (!matches2[j] && s1[i] === s2[j]) {
+        matches1[i] = true;
+        matches2[j] = true;
+        matchCount++;
+        break;
+      }
+    }
+  }
+
+  if (matchCount === 0) return 0;
+
+  let transpositions = 0;
+  let k = 0;
+  for (let i = 0; i < len1; i++) {
+    if (matches1[i]) {
+      while (!matches2[k]) k++;
+      if (s1[i] !== s2[k]) transpositions++;
+      k++;
+    }
+  }
+
+  const jaro = (matchCount / len1 + matchCount / len2 + (matchCount - transpositions / 2) / matchCount) / 3;
+
+  let prefix = 0;
+  for (let i = 0; i < Math.min(4, len1, len2); i++) {
+    if (s1[i] === s2[i]) prefix++;
+    else break;
+  }
+
+  const jw = jaro + prefix * 0.1 * (1 - jaro);
+  return Math.round(jw * 100);
+}
+
+/**
+ * Combined String Similarity (Max of Levenshtein and Jaro-Winkler)
+ */
+function stringSimilarity(s1, s2) {
+  if (!s1 || !s2) return 0;
+  if (s1 === s2) return 100;
+  return Math.max(levenshteinSimilarity(s1, s2), jaroWinklerSimilarity(s1, s2));
+}
+
+/**
+ * Checks if two tokens form a valid initial match (e.g. "J" vs "JAGESHWAR")
+ */
+function isInitialMatch(t1, t2) {
+  if (!t1 || !t2) return false;
+  if (t1 === t2) return true;
+  if (t1.length === 1 && t2.startsWith(t1)) return true;
+  if (t2.length === 1 && t1.startsWith(t2)) return true;
+  return false;
+}
+
+/**
+ * 3. Matching Engine & Smarter Decision Evaluator
+ * Compares normalized names using token matching, fuzzy algorithms, initial support,
+ * weighted confidence (35% First, 35% Last, 20% Middle, 10% Token Overall), and context signals.
+ */
+function matchNames(submittedName, ocrName, ocrConfidence = 95, context = {}) {
   const normSub = normalizeName(submittedName);
   const normOcr = normalizeName(ocrName);
 
   const subTok = tokenizeName(normSub);
   const ocrTok = tokenizeName(normOcr);
 
-  let firstNameSim = levenshteinSimilarity(subTok.firstName, ocrTok.firstName);
-  let lastNameSim = levenshteinSimilarity(subTok.lastName, ocrTok.lastName);
-
-  // If names were tokenized with 1 token on one side vs 2 on other (e.g. "KIRANKUMAR MESHRAM" vs "KIRANKUMARMESHRAM")
-  if (subTok.firstName && ocrTok.firstName && (normSub.replace(/\s/g, "") === normOcr.replace(/\s/g, ""))) {
-    firstNameSim = 100;
-    lastNameSim = 100;
+  let removedNoiseWords = [];
+  if (ocrName) {
+    const rawOcrUpper = ocrName.toUpperCase();
+    removedNoiseWords = rawOcrUpper
+      .split(/[^A-Z]/)
+      .filter((w) => OCR_NOISE_WORDS.has(w));
   }
 
-  const firstMatch = firstNameSim >= 80;
-  const lastMatch = subTok.lastName && ocrTok.lastName ? lastNameSim >= 80 : false;
+  // 1. Exact Match or Unordered Token Set Equivalence
+  const ocrTokenSet = new Set(ocrTok.tokens);
+  const isExactStringMatch = normSub === normOcr;
+  const isUnorderedSetMatch =
+    subTok.tokens.length > 0 &&
+    ocrTok.tokens.length > 0 &&
+    subTok.tokens.length === ocrTok.tokens.length &&
+    subTok.tokens.every((t) => ocrTokenSet.has(t));
 
-  // Middle Name Similarity & Abbreviation Check
+  // 2. Token Matching Engine
+  let matchedTokenCount = 0;
+  let totalTokenSim = 0;
+  let initialMatchUsed = false;
+
+  subTok.tokens.forEach((st) => {
+    let bestSim = 0;
+    ocrTok.tokens.forEach((ot) => {
+      if (st === ot) {
+        bestSim = Math.max(bestSim, 100);
+      } else if (isInitialMatch(st, ot)) {
+        bestSim = Math.max(bestSim, 95);
+        initialMatchUsed = true;
+      } else {
+        const sim = stringSimilarity(st, ot);
+        if (sim >= 75) {
+          bestSim = Math.max(bestSim, sim);
+        }
+      }
+    });
+
+    if (bestSim >= 75) matchedTokenCount++;
+    totalTokenSim += bestSim;
+  });
+
+  const tokenAverage = Math.round(totalTokenSim / Math.max(subTok.tokens.length, 1));
+
+  // 3. First, Last, and Middle Component Evaluation
+  const findBestComponentSim = (targetToken) => {
+    if (!targetToken) return { sim: 100, isInitial: false };
+    let bestSim = 0;
+    let isInitial = false;
+    ocrTok.tokens.forEach((ot) => {
+      if (targetToken === ot) {
+        bestSim = Math.max(bestSim, 100);
+      } else if (isInitialMatch(targetToken, ot)) {
+        bestSim = Math.max(bestSim, 95);
+        isInitial = true;
+      } else {
+        const sim = stringSimilarity(targetToken, ot);
+        if (sim > bestSim) bestSim = sim;
+      }
+    });
+    return { sim: bestSim, isInitial };
+  };
+
+  const firstComp = findBestComponentSim(subTok.firstName);
+  const lastComp = findBestComponentSim(subTok.lastName);
+
+  const firstNameSim = firstComp.sim;
+  const lastNameSim = lastComp.sim;
+  const isFirstInitial = firstComp.isInitial;
+  const isLastInitial = lastComp.isInitial;
+
+  const firstMatch = firstNameSim >= 75;
+  const lastMatch = subTok.lastName && ocrTok.tokens.length > 1 ? lastNameSim >= 75 : true;
+
+  // Middle Name Evaluation
   let middleSim = 100;
   let middleMatch = true;
   let isMiddleAbbreviated = false;
@@ -124,100 +274,99 @@ function matchNames(submittedName, ocrName, ocrConfidence = 95) {
   if (subMiddleStr && ocrMiddleStr) {
     if (subMiddleStr === ocrMiddleStr) {
       middleSim = 100;
-      middleMatch = true;
     } else if (
       (subMiddleStr.length === 1 && ocrMiddleStr.startsWith(subMiddleStr)) ||
       (ocrMiddleStr.length === 1 && subMiddleStr.startsWith(ocrMiddleStr))
     ) {
-      // Rule 2: Initial Match (e.g. "J" vs "JAGESHWAR")
       middleSim = 95;
-      middleMatch = true;
       isMiddleAbbreviated = true;
     } else {
-      middleSim = levenshteinSimilarity(subMiddleStr, ocrMiddleStr);
+      middleSim = stringSimilarity(subMiddleStr, ocrMiddleStr);
       middleMatch = middleSim >= 70;
     }
   } else if (subMiddleStr && !ocrMiddleStr) {
-    // Rule 3: Middle Missing on OCR
-    middleSim = 80;
-    middleMatch = true;
-    isMiddleMissing = true;
-  } else if (!subMiddleStr && ocrMiddleStr) {
-    middleSim = 85;
-    middleMatch = true;
-  }
-
-  // Token Average Similarity
-  const allSubTokens = subTok.tokens;
-  const allOcrTokens = ocrTok.tokens;
-  let matchedTokenCount = 0;
-
-  allSubTokens.forEach((st) => {
-    const bestMatch = allOcrTokens.some(
-      (ot) => ot === st || (ot.length === 1 && st.startsWith(ot)) || (st.length === 1 && ot.startsWith(st)) || levenshteinSimilarity(st, ot) >= 80
+    const middleMatchedAny = subTok.middleNames.some((mt) =>
+      ocrTok.tokens.some((ot) => mt === ot || isInitialMatch(mt, ot) || stringSimilarity(mt, ot) >= 75)
     );
-    if (bestMatch) matchedTokenCount++;
-  });
-
-  const maxTokenLen = Math.max(allSubTokens.length, allOcrTokens.length) || 1;
-  const tokenAverage = Math.round((matchedTokenCount / maxTokenLen) * 100);
-
-  // Overall Weighted Similarity
-  let overallSim = Math.round(firstNameSim * 0.4 + lastNameSim * 0.4 + middleSim * 0.2);
-  if (normSub === normOcr) {
-    overallSim = 100;
-  } else if (firstMatch && lastMatch && isMiddleAbbreviated) {
-    overallSim = Math.max(overallSim, 98);
-  } else if (firstMatch && lastMatch && isMiddleMissing) {
-    overallSim = Math.max(overallSim, 95);
+    if (middleMatchedAny) {
+      middleSim = 95;
+    } else {
+      middleSim = 90;
+      isMiddleMissing = true;
+    }
+  } else if (!subMiddleStr && ocrMiddleStr) {
+    middleSim = 95;
   }
 
-  // Decision & Reasoning Rules
+  // 4. Weighted Confidence Calculation (35% First, 35% Last, 20% Middle, 10% Token Overall)
+  let weightedSim = Math.round(
+    firstNameSim * 0.35 +
+      lastNameSim * 0.35 +
+      middleSim * 0.20 +
+      tokenAverage * 0.10
+  );
+
+  if (isExactStringMatch || isUnorderedSetMatch) {
+    weightedSim = 100;
+  } else if (firstMatch && lastMatch && (isMiddleAbbreviated || isMiddleMissing)) {
+    weightedSim = Math.max(weightedSim, 95);
+  }
+
+  const confFactor = Math.min(1.0, ocrConfidence / 100);
+  const confidence = Math.round(weightedSim * 0.85 + confFactor * 15);
+
+  // 5. Smarter Decision Rules Engine
   let decision = "REJECTED";
   let reason = "Name mismatch.";
   const warnings = [];
 
-  if (firstMatch && lastMatch) {
-    if (isMiddleAbbreviated) {
-      decision = "VERIFIED";
-      reason = "Middle name abbreviated on document.";
-      warnings.push("Middle name abbreviated.");
-    } else if (isMiddleMissing) {
-      decision = "VERIFIED";
-      reason = "Middle name omitted on document.";
-      warnings.push("Middle name missing on OCR.");
-    } else if (!middleMatch) {
-      // Rule 1: First and Last match, middle differs
-      decision = "VERIFIED";
-      reason = "First and last name matched, middle name differs.";
-      warnings.push("Middle name mismatch.");
-    } else {
-      decision = "VERIFIED";
-      reason = "Full name matched successfully.";
-    }
-  } else if (firstMatch && (!subTok.lastName || !ocrTok.lastName)) {
-    // Rule 4: First matches, last missing
-    decision = "MANUAL_REVIEW";
-    reason = "First name matched, but last name is missing on document.";
-    warnings.push("Missing surname on document.");
-  } else if (!firstMatch && lastMatch) {
-    // Rule 5: Only surname matches
-    decision = "REJECTED";
-    reason = "Only surname matched, first name differs.";
-  } else if (firstMatch && !lastMatch) {
-    // Rule 6: Only first name matches
-    decision = "MANUAL_REVIEW";
-    reason = "Only first name matched, surname differs.";
-    warnings.push("Surname mismatch.");
-  } else {
-    // Rule 7: Nothing matches
-    decision = "REJECTED";
-    reason = "First name and surname both failed matching.";
+  let noiseNote = "";
+  if (removedNoiseWords.length > 0) {
+    const uniqueNoise = [...new Set(removedNoiseWords)].map((w) => `'${w}'`).join(", ");
+    noiseNote = ` OCR contained extra tokens (${uniqueNoise}) that were removed during normalization.`;
   }
 
-  // Calculate Final Confidence Score
-  const confFactor = Math.min(1.0, ocrConfidence / 100);
-  const confidence = Math.round(overallSim * 0.7 + tokenAverage * 0.3 * confFactor);
+  if (context.numberMatched && context.dobMatched && (isExactStringMatch || isUnorderedSetMatch || weightedSim >= 80)) {
+    decision = "VERIFIED";
+    reason = `Document number and DOB matched exactly.${noiseNote} Remaining name tokens matched successfully.`;
+    if (isMiddleAbbreviated || initialMatchUsed) warnings.push("Middle name abbreviated.");
+    if (isMiddleMissing) warnings.push("Middle name omitted on document.");
+  } else if (isExactStringMatch || isUnorderedSetMatch) {
+    decision = "VERIFIED";
+    reason = `Full name matched successfully.${noiseNote}`;
+  } else if (weightedSim >= 90) {
+    decision = "VERIFIED";
+    reason = `Name matched with high confidence (${weightedSim}%).${noiseNote}`;
+    if (isMiddleAbbreviated || initialMatchUsed) warnings.push("Middle name abbreviated.");
+    if (isMiddleMissing) warnings.push("Middle name omitted on document.");
+  } else if (firstMatch && lastMatch) {
+    decision = "VERIFIED";
+    if (isMiddleAbbreviated || initialMatchUsed || isFirstInitial || isLastInitial) {
+      reason = `Name tokens matched successfully with initial abbreviations.${noiseNote}`;
+      warnings.push("Name contains initial abbreviations.");
+    } else if (isMiddleMissing) {
+      reason = `First and last name matched successfully, middle name omitted on document.${noiseNote}`;
+      warnings.push("Middle name missing on document.");
+    } else {
+      reason = `Name tokens matched successfully with minor OCR variation.${noiseNote}`;
+    }
+  } else if (firstMatch && !subTok.lastName) {
+    decision = "VERIFIED";
+    reason = `First name matched successfully.${noiseNote}`;
+  } else if (firstMatch && !lastMatch && context.numberMatched) {
+    decision = "VERIFIED";
+    reason = `Document number matched. First name matched successfully.${noiseNote}`;
+  } else if (firstMatch && !lastMatch) {
+    decision = "MANUAL_REVIEW";
+    reason = `Only first name matched, surname differs.${noiseNote}`;
+    warnings.push("Surname mismatch.");
+  } else if (!firstMatch && lastMatch) {
+    decision = "REJECTED";
+    reason = `Only surname matched, first name differs.`;
+  } else {
+    decision = "REJECTED";
+    reason = `First name and surname both failed matching.`;
+  }
 
   return {
     normalizedSubmitted: normSub,
@@ -240,13 +389,13 @@ function matchNames(submittedName, ocrName, ocrConfidence = 95) {
       lastName: lastMatch,
     },
     similarity: {
-      overall: overallSim,
+      overall: weightedSim,
       firstName: firstNameSim,
       middleName: middleSim,
       lastName: lastNameSim,
       tokenAverage,
     },
-    confidence,
+    confidence: Math.max(confidence, weightedSim >= 90 ? weightedSim : confidence),
     reason,
     warnings,
     decision,
@@ -257,4 +406,7 @@ module.exports = {
   normalizeName,
   tokenizeName,
   matchNames,
+  levenshteinSimilarity,
+  jaroWinklerSimilarity,
+  stringSimilarity,
 };

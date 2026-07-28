@@ -210,11 +210,17 @@ router.post(
 
       // Validate Aadhaar Details
       if (extractedAadhaar?.details) {
-        if (extractedAadhaar.details.number && formData.aadhaar && formData.aadhaar !== extractedAadhaar.details.number) {
+        const aadhaarNumMatch = extractedAadhaar.details.number && formData.aadhaar ? formData.aadhaar === extractedAadhaar.details.number.replace(/\s/g, "") : false;
+        if (extractedAadhaar.details.number && formData.aadhaar && !aadhaarNumMatch) {
           mismatches.push("Aadhaar number mismatch.");
         }
         if (extractedAadhaar.details.name) {
-          const aadhaarMatch = matchNames(formData.name, extractedAadhaar.details.name, extractedAadhaar.confidence ? Math.round(extractedAadhaar.confidence * 100) : 95);
+          const aadhaarMatch = matchNames(
+            formData.name,
+            extractedAadhaar.details.name,
+            extractedAadhaar.confidence ? Math.round(extractedAadhaar.confidence * 100) : 95,
+            { numberMatched: aadhaarNumMatch, dobMatched: true }
+          );
           logMatchResult({ traceId, matchResult: { document: "Aadhaar", ...aadhaarMatch } });
 
           if (aadhaarMatch.decision === "REJECTED") {
@@ -227,11 +233,17 @@ router.post(
 
       // Validate PAN Details
       if (extractedPAN?.details) {
-        if (extractedPAN.details.number && formData.pan && formData.pan !== extractedPAN.details.number) {
+        const panNumMatch = extractedPAN.details.number && formData.pan ? formData.pan === extractedPAN.details.number : false;
+        if (extractedPAN.details.number && formData.pan && !panNumMatch) {
           mismatches.push("PAN number mismatch.");
         }
         if (extractedPAN.details.name) {
-          const panMatch = matchNames(formData.name, extractedPAN.details.name, extractedPAN.confidence ? Math.round(extractedPAN.confidence * 100) : 95);
+          const panMatch = matchNames(
+            formData.name,
+            extractedPAN.details.name,
+            extractedPAN.confidence ? Math.round(extractedPAN.confidence * 100) : 95,
+            { numberMatched: panNumMatch, dobMatched: true }
+          );
           logMatchResult({ traceId, matchResult: { document: "PAN", ...panMatch } });
 
           if (panMatch.decision === "REJECTED") {

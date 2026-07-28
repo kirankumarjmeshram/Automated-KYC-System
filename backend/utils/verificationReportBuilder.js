@@ -35,11 +35,16 @@ function buildVerificationReport({
   let aadhaarNumberMatch = false;
 
   if (aadhaarDetails) {
-    if (aadhaarDetails.name && nameSub) {
-      aadhaarNameMatchResult = matchNames(nameSub, aadhaarDetails.name, extractedAadhaar.confidence ? Math.round(extractedAadhaar.confidence * 100) : 95);
-    }
     if (aadhaarDetails.number && aadhaarSub) {
       aadhaarNumberMatch = aadhaarSub === aadhaarDetails.number.replace(/\s/g, "");
+    }
+    if (aadhaarDetails.name && nameSub) {
+      aadhaarNameMatchResult = matchNames(
+        nameSub,
+        aadhaarDetails.name,
+        extractedAadhaar.confidence ? Math.round(extractedAadhaar.confidence * 100) : 95,
+        { numberMatched: aadhaarNumberMatch, dobMatched: true }
+      );
     }
   }
 
@@ -49,11 +54,16 @@ function buildVerificationReport({
   let panNumberMatch = false;
 
   if (panDetails) {
-    if (panDetails.name && nameSub) {
-      panNameMatchResult = matchNames(nameSub, panDetails.name, extractedPAN.confidence ? Math.round(extractedPAN.confidence * 100) : 95);
-    }
     if (panDetails.number && panSub) {
       panNumberMatch = panSub === panDetails.number;
+    }
+    if (panDetails.name && nameSub) {
+      panNameMatchResult = matchNames(
+        nameSub,
+        panDetails.name,
+        extractedPAN.confidence ? Math.round(extractedPAN.confidence * 100) : 95,
+        { numberMatched: panNumberMatch, dobMatched: true }
+      );
     }
   }
 
