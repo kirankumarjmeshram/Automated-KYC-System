@@ -11,6 +11,7 @@ service-account-key.json
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 CHANGELOG.md
 IMPLEMENTATION_REPORT.md
+imp.txt
 # Runtime data
 pids
 *.pid

@@ -33,6 +33,10 @@ PAN_HEADER_BLACKLIST = [
     "खाता",
     "नाम",
     "पिता",
+    "HRT",
+    "HER",
+    "FAT",
+    "HRCY"
 ]
 
 def is_header_line(line_text: str) -> bool:
@@ -49,7 +53,7 @@ def structure_text_with_gemini(raw_text: str) -> ExtractedDetails:
     """
     Dispatches extracted OCR text to Gemini REST API.
     Uses structural reasoning to extract name, father_name, number, dob.
-    Falls back to spatial regex parser if Gemini is unconfigured or rate limited.
+    Falls back to spatial document parser if Gemini is unconfigured or rate limited.
     """
     if not raw_text or not raw_text.strip():
         return ExtractedDetails(type="Unknown", name="", father_name="", number="", dob="", gender="", address="")
@@ -92,7 +96,7 @@ def structure_text_with_gemini(raw_text: str) -> ExtractedDetails:
                 )
 
                 try:
-                    with urllib.request.urlopen(req, timeout=8) as response:
+                    with urllib.request.urlopen(req, timeout=4) as response:
                         res_body = response.read().decode("utf-8")
                         res_json = json.loads(res_body)
                         candidates = res_json.get("candidates", [])
@@ -115,87 +119,12 @@ def structure_text_with_gemini(raw_text: str) -> ExtractedDetails:
                     logger.warn(f"Gemini REST model {model_name} failed: {model_err}")
                     continue
         except Exception as e:
-            logger.warning(f"Gemini API structuring failed: {e}. Falling back to spatial regex parser.")
+            logger.warning(f"Gemini API structuring failed: {e}. Falling back to spatial document parser.")
 
     return parse_details_regex(raw_text)
 
 def parse_details_regex(raw_text: str) -> ExtractedDetails:
-    """
-    Robust spatial regex entity extractor for PAN & Aadhaar cards.
-    Excludes header noise (GOVT OF INDIA, INCOME TAX) and parses Holder Name & Father's Name.
-    """
-    doc_type = "Unknown"
-    name = ""
-    father_name = ""
-    number = ""
-    dob = ""
-    gender = ""
-    address = ""
-
-    if not raw_text:
-        return ExtractedDetails(type="Unknown", name="", father_name="", number="", dob="", gender="", address="")
-
-    lines = [line.strip() for line in raw_text.split("\n") if line.strip()]
-
-    # 1. Evaluate PAN Document
-    is_pan = "INCOME TAX" in raw_text.upper() or "PERMANENT ACCOUNT" in raw_text.upper() or re.search(r"\b[A-Z]{5}[0-9]{4}[A-Z]\b", raw_text)
-    if is_pan:
-        doc_type = "PAN"
-        pan_match = re.search(r"\b[A-Z]{5}[0-9]{4}[A-Z]\b", raw_text)
-        if pan_match:
-            number = pan_match.group(0)
-
-        dob_match = re.search(r"\b\d{2}/\d{2}/\d{4}\b", raw_text)
-        if dob_match:
-            dob = dob_match.group(0)
-
-        name_candidates = []
-        for line in lines:
-            line_upper = line.upper().strip()
-            # Ignore headers, logos, numbers, and dates
-            if is_header_line(line_upper):
-                continue
-            if number and number in line_upper:
-                continue
-            if dob and dob in line_upper:
-                continue
-
-            # Candidate name lines contain 3 to 35 uppercase letters and spaces
-            if re.match(r"^[A-Z\s\.]{3,35}$", line_upper) and len(line_upper) >= 3:
-                name_candidates.append(line_upper)
-
-        if len(name_candidates) >= 1:
-            name = name_candidates[0]
-        if len(name_candidates) >= 2:
-            father_name = name_candidates[1]
-
-    # 2. Evaluate Aadhaar Document
-    elif "आधार" in raw_text or "Aadhaar" in raw_text or re.search(r"\b\d{4}\s?\d{4}\s?\d{4}\b", raw_text):
-        doc_type = "Aadhaar"
-        aadhaar_match = re.search(r"\b\d{4}\s?\d{4}\s?\d{4}\b", raw_text)
-        if aadhaar_match:
-            number = aadhaar_match.group(0).replace(" ", "")
-
-        dob_match = re.search(r"\b\d{2}/\d{2}/\d{4}\b", raw_text)
-        if dob_match:
-            dob = dob_match.group(0)
-
-        for line in lines:
-            if "DOB" in line or "Birth" in line or "DATE OF BIRTH" in line:
-                continue
-            line_upper = line.upper().strip()
-            if is_header_line(line_upper):
-                continue
-            if re.match(r"^[A-Z][a-z]+(\s[A-Z][a-z]+)+$", line) or re.match(r"^[A-Z\s]{4,30}$", line_upper):
-                name = line_upper
-                break
-
-    return ExtractedDetails(
-        type=doc_type,
-        name=name,
-        father_name=father_name,
-        number=number,
-        dob=dob,
-        gender=gender,
-        address=address
-    )
+    """Delegates to high-accuracy modular Document Parser."""
+    from app.services.document_parsers import parse_document
+    details, _ = parse_document(raw_text, [])
+    return details

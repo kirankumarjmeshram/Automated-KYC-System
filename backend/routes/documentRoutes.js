@@ -3,7 +3,17 @@ const multer = require("multer");
 const { processImage } = require("../controllers/documentController");
 const VerificationStatus = require("../constants/verificationStatus");
 const logger = require("../logger");
-const { logAudit, logOcrStep, logPerformance } = require("../logger");
+const {
+  logOcrStep,
+  logDocumentInfo,
+  logRawOcr,
+  logGeminiResponse,
+  logParsedData,
+  logValidationInput,
+  logMatchResult,
+  logOcrError,
+} = require("../logger/ocrLogger");
+const { logAudit, logPerformance } = require("../logger");
 const { matchNames } = require("../utils/nameMatcher");
 const { buildVerificationReport } = require("../utils/verificationReportBuilder");
 
@@ -29,8 +39,8 @@ router.post(
 
     try {
       addTimelineStep(VerificationStatus.UPLOADED);
+      logOcrStep({ traceId, stage: "DOCUMENT_RECEIVED", message: `Form submission received: Name="${req.body.name || ""}"` });
       logAudit({ traceId, oldStatus: null, newStatus: VerificationStatus.UPLOADED, event: "UPLOAD_RECEIVED" });
-      logger.info(`Received KYC form submission: Name="${req.body.name || ""}"`, { traceId });
 
       if (!req.body.name || (!req.body.aadhaar && !req.body.pan)) {
         addTimelineStep(VerificationStatus.REJECTED);
@@ -78,10 +88,54 @@ router.post(
       }
 
       addTimelineStep(VerificationStatus.OCR_PROCESSING);
+      logOcrStep({ traceId, stage: "IMAGE_PREPROCESSING_STARTED" });
       logAudit({ traceId, oldStatus: VerificationStatus.UPLOADED, newStatus: VerificationStatus.OCR_PROCESSING, event: "OCR_STARTED" });
 
-      const extractedAadhaar = aadhaarFile ? await processImage(aadhaarFile, traceId) : null;
-      const extractedPAN = panFile ? await processImage(panFile, traceId) : null;
+      // Execute OCR for uploaded documents in parallel
+      logOcrStep({ traceId, stage: "OCR_STARTED" });
+      const [extractedAadhaar, extractedPAN] = await Promise.all([
+        aadhaarFile ? processImage(aadhaarFile, traceId) : Promise.resolve(null),
+        panFile ? processImage(panFile, traceId) : Promise.resolve(null),
+      ]);
+
+      logOcrStep({ traceId, stage: "OCR_COMPLETED" });
+
+      // Log RAW OCR text & Parsed Data if available
+      if (extractedPAN) {
+        logOcrStep({ traceId, stage: "PARSER_STARTED", fileName: panFile?.originalname || "pan.png" });
+        if (extractedPAN.raw_text) {
+          logRawOcr({
+            traceId,
+            engine: extractedPAN.ocrEngine || "EasyOCR",
+            confidence: extractedPAN.confidence || 0,
+            rawText: extractedPAN.raw_text,
+            rawPaddle: extractedPAN.raw_paddle,
+            rawEasy: extractedPAN.raw_easy,
+          });
+        }
+        if (extractedPAN.details) {
+          logParsedData({ traceId, parsedData: extractedPAN.details });
+        }
+        logOcrStep({ traceId, stage: "PARSER_COMPLETED", fileName: panFile?.originalname || "pan.png" });
+      }
+
+      if (extractedAadhaar) {
+        logOcrStep({ traceId, stage: "PARSER_STARTED", fileName: aadhaarFile?.originalname || "aadhaar.png" });
+        if (extractedAadhaar.raw_text) {
+          logRawOcr({
+            traceId,
+            engine: extractedAadhaar.ocrEngine || "EasyOCR",
+            confidence: extractedAadhaar.confidence || 0,
+            rawText: extractedAadhaar.raw_text,
+            rawPaddle: extractedAadhaar.raw_paddle,
+            rawEasy: extractedAadhaar.raw_easy,
+          });
+        }
+        if (extractedAadhaar.details) {
+          logParsedData({ traceId, parsedData: extractedAadhaar.details });
+        }
+        logOcrStep({ traceId, stage: "PARSER_COMPLETED", fileName: aadhaarFile?.originalname || "aadhaar.png" });
+      }
 
       // Case 1: AI Service / OCR engines offline or unconfigured
       const aadhaarUnavailable = !extractedAadhaar || extractedAadhaar.status === VerificationStatus.OCR_UNAVAILABLE;
@@ -134,7 +188,20 @@ router.post(
 
       addTimelineStep(VerificationStatus.OCR_COMPLETED);
 
-      // Evaluate field matching using Enterprise Name Engine
+      // Log VALIDATION_STARTED & Validation Inputs
+      logOcrStep({ traceId, stage: "VALIDATION_STARTED" });
+      logValidationInput({
+        traceId,
+        submittedData: formData,
+        extractedData: {
+          aadhaar: extractedAadhaar?.details || null,
+          pan: extractedPAN?.details || null,
+        },
+      });
+      logOcrStep({ traceId, stage: "VALIDATION_COMPLETED" });
+
+      // Log MATCHING_STARTED
+      logOcrStep({ traceId, stage: "MATCHING_STARTED" });
       addTimelineStep("DATA_MATCHING");
       logAudit({ traceId, oldStatus: VerificationStatus.OCR_PROCESSING, newStatus: VerificationStatus.OCR_COMPLETED, event: "DATA_MATCHING" });
 
@@ -148,8 +215,8 @@ router.post(
         }
         if (extractedAadhaar.details.name) {
           const aadhaarMatch = matchNames(formData.name, extractedAadhaar.details.name, extractedAadhaar.confidence ? Math.round(extractedAadhaar.confidence * 100) : 95);
-          logOcrStep({ traceId, step: "AADHAAR_NAME_MATCH", confidence: aadhaarMatch.confidence, message: `Submitted="${formData.name}" OCR="${extractedAadhaar.details.name}" Decision=${aadhaarMatch.decision}` });
-          
+          logMatchResult({ traceId, matchResult: { document: "Aadhaar", ...aadhaarMatch } });
+
           if (aadhaarMatch.decision === "REJECTED") {
             mismatches.push(`Aadhaar name mismatch: ${aadhaarMatch.reason}`);
           } else if (aadhaarMatch.decision === "MANUAL_REVIEW") {
@@ -165,7 +232,7 @@ router.post(
         }
         if (extractedPAN.details.name) {
           const panMatch = matchNames(formData.name, extractedPAN.details.name, extractedPAN.confidence ? Math.round(extractedPAN.confidence * 100) : 95);
-          logOcrStep({ traceId, step: "PAN_NAME_MATCH", confidence: panMatch.confidence, message: `Submitted="${formData.name}" OCR="${extractedPAN.details.name}" Decision=${panMatch.decision}` });
+          logMatchResult({ traceId, matchResult: { document: "PAN", ...panMatch } });
 
           if (panMatch.decision === "REJECTED") {
             mismatches.push(`PAN name mismatch: ${panMatch.reason}`);
@@ -174,6 +241,8 @@ router.post(
           }
         }
       }
+
+      logOcrStep({ traceId, stage: "MATCHING_COMPLETED" });
 
       if (mismatches.length > 0) {
         addTimelineStep(VerificationStatus.REJECTED);
@@ -237,6 +306,7 @@ router.post(
       return res.json(report);
     } catch (error) {
       addTimelineStep(VerificationStatus.REJECTED);
+      logOcrError({ traceId, stage: "PIPELINE_EXCEPTION", message: error.message, stack: error.stack });
       logAudit({ traceId, oldStatus: null, newStatus: VerificationStatus.REJECTED, event: "SERVER_ERROR", details: error.message });
       logger.error(`Server Error in /verify: ${error.stack || error.message}`, { traceId });
 
@@ -263,6 +333,7 @@ router.post("/process", upload.single("file"), async (req, res) => {
   const timeline = [{ status: VerificationStatus.UPLOADED, timestamp: new Date().toISOString() }];
 
   try {
+    logOcrStep({ traceId, stage: "DOCUMENT_RECEIVED", message: `Single file upload: Name="${req.file?.originalname || ""}"` });
     logAudit({ traceId, oldStatus: null, newStatus: VerificationStatus.UPLOADED, event: "SINGLE_FILE_UPLOAD" });
 
     if (!req.file) {
@@ -278,8 +349,12 @@ router.post("/process", upload.single("file"), async (req, res) => {
       return res.status(400).json(report);
     }
 
+    logOcrStep({ traceId, stage: "IMAGE_PREPROCESSING_STARTED" });
     timeline.push({ status: VerificationStatus.OCR_PROCESSING, timestamp: new Date().toISOString() });
+
+    logOcrStep({ traceId, stage: "OCR_STARTED" });
     const result = await processImage(req.file, traceId);
+    logOcrStep({ traceId, stage: "OCR_COMPLETED" });
 
     if (!result || !result.success || result.status === VerificationStatus.OCR_FAILED) {
       timeline.push({ status: VerificationStatus.OCR_FAILED, timestamp: new Date().toISOString() });
@@ -311,6 +386,20 @@ router.post("/process", upload.single("file"), async (req, res) => {
       return res.json(report);
     }
 
+    logOcrStep({ traceId, stage: "PARSER_STARTED" });
+    if (result.raw_text) {
+      logRawOcr({
+        traceId,
+        engine: result.ocrEngine || "EasyOCR",
+        confidence: result.confidence || 0,
+        rawText: result.raw_text,
+      });
+    }
+    if (result.details) {
+      logParsedData({ traceId, parsedData: result.details });
+    }
+    logOcrStep({ traceId, stage: "PARSER_COMPLETED" });
+
     timeline.push({ status: VerificationStatus.OCR_COMPLETED, timestamp: new Date().toISOString() });
     logAudit({ traceId, oldStatus: VerificationStatus.UPLOADED, newStatus: VerificationStatus.OCR_COMPLETED, event: "SINGLE_FILE_OCR_SUCCESS" });
 
@@ -328,6 +417,7 @@ router.post("/process", upload.single("file"), async (req, res) => {
 
     return res.json(report);
   } catch (error) {
+    logOcrError({ traceId, stage: "SINGLE_FILE_PROCESS_EXCEPTION", message: error.message, stack: error.stack });
     logger.error(`Server Error in /process: ${error.stack || error.message}`, { traceId });
     const report = buildVerificationReport({
       traceId,

@@ -1,12 +1,14 @@
 import numpy as np
 import logging
 import sys
+import os
 from app.services.ocr_fusion import fuse_ocr_results
 
 logger = logging.getLogger(__name__)
 
 paddle_engine = None
 easyocr_engine = None
+easyocr_version = "unknown"
 
 def get_paddle_engine():
     global paddle_engine
@@ -26,13 +28,14 @@ def get_paddle_engine():
     return paddle_engine
 
 def get_easyocr_engine():
-    global easyocr_engine
+    global easyocr_engine, easyocr_version
     if easyocr_engine is None:
         try:
             import easyocr
+            easyocr_version = getattr(easyocr, "__version__", "1.7.x")
             sys.stdout.reconfigure(encoding='utf-8', errors='ignore')
             easyocr_engine = easyocr.Reader(['en'], gpu=False, verbose=False)
-            logger.info("EasyOCR engine initialized successfully.")
+            logger.info(f"EasyOCR v{easyocr_version} engine initialized successfully.")
         except Exception as e:
             logger.warning(f"EasyOCR initialization failed: {e}")
             easyocr_engine = False
@@ -40,49 +43,78 @@ def get_easyocr_engine():
 
 def extract_ocr_text(processed_img: np.ndarray, file_name: str = "") -> dict:
     """
-    Executes PaddleOCR & EasyOCR engines and applies OCR Result Fusion.
+    Executes PaddleOCR & EasyOCR engines and logs engine configuration,
+    complete unsummarized raw outputs, bounding boxes, and per-line confidence.
     """
     paddle_boxes = []
     easy_boxes = []
+
+    raw_paddle_objects = []
+    raw_easyocr_objects = []
+
+    # EasyOCR Engine Info
+    easy_reader = get_easyocr_engine()
+    model_dir = os.path.expanduser("~/.EasyOCR/model")
+    engine_info = {
+        "engine": "EasyOCR",
+        "version": easyocr_version,
+        "languages": ["en"],
+        "gpu_enabled": False,
+        "model_path": model_dir,
+        "configuration": {"verbose": False, "gpu": False},
+    }
 
     # 1. PaddleOCR Engine
     try:
         paddle = get_paddle_engine()
         if paddle:
             result = paddle.ocr(processed_img)
+            raw_paddle_objects = result
             if result and result[0]:
                 for line in result[0]:
                     box, (text, conf) = line
                     top_y = float(box[0][1]) if isinstance(box, list) and len(box) > 0 else 0.0
                     paddle_boxes.append({"top_y": top_y, "text": text.strip(), "confidence": float(conf), "box": box})
                 paddle_boxes.sort(key=lambda b: b["top_y"])
-                logger.info(f"PaddleOCR extracted {len(paddle_boxes)} text blocks")
     except Exception as e:
         logger.warning(f"PaddleOCR execution error: {e}")
 
     # 2. EasyOCR Engine
     try:
-        easy_reader = get_easyocr_engine()
         if easy_reader:
             easy_result = easy_reader.readtext(processed_img)
+            # Serialize numpy coordinates inside raw_easyocr_objects
             if easy_result:
                 for item in easy_result:
                     box, text, conf = item
-                    box_list = [[float(p[0]), float(p[1])] for p in box] if isinstance(box, (list, np.ndarray)) else None
-                    top_y = float(box[0][1]) if isinstance(box, (list, np.ndarray)) and len(box) > 0 else 0.0
-                    easy_boxes.append({"top_y": top_y, "text": text.strip(), "confidence": float(conf), "box": box_list})
+                    box_list = [[float(p[0]), float(p[1])] for p in box] if isinstance(box, (list, np.ndarray)) else []
+                    raw_easyocr_objects.append([box_list, str(text), float(conf)])
+                    top_y = float(box_list[0][1]) if len(box_list) > 0 else 0.0
+                    easy_boxes.append({"top_y": top_y, "text": str(text).strip(), "confidence": float(conf), "box": box_list})
                 easy_boxes.sort(key=lambda b: b["top_y"])
-                logger.info(f"EasyOCR extracted {len(easy_boxes)} text blocks")
     except Exception as e:
         logger.warning(f"EasyOCR execution error: {e}")
 
     # 3. Fuse Results
     fused = fuse_ocr_results(paddle_boxes, easy_boxes)
 
+    # Construct per-line confidence strings
+    per_line_confidence = []
+    for b in fused.get("fused_boxes", []):
+        per_line_confidence.append({
+            "text": b.get("text", ""),
+            "confidence": b.get("confidence", 0.0),
+            "box": b.get("box", []),
+        })
+
     return {
         "raw_text": fused["fused_text"],
         "raw_paddle": "\n".join([b["text"] for b in paddle_boxes]),
         "raw_easy": "\n".join([b["text"] for b in easy_boxes]),
+        "raw_paddle_objects": raw_paddle_objects,
+        "raw_easyocr_objects": raw_easyocr_objects,
+        "engine_info": engine_info,
+        "per_line_confidence": per_line_confidence,
         "ocr_engine": fused["engine"],
         "confidence_score": fused["confidence"],
         "bounding_boxes": fused["fused_boxes"],
