@@ -91,12 +91,10 @@ router.post(
       logOcrStep({ traceId, stage: "IMAGE_PREPROCESSING_STARTED" });
       logAudit({ traceId, oldStatus: VerificationStatus.UPLOADED, newStatus: VerificationStatus.OCR_PROCESSING, event: "OCR_STARTED" });
 
-      // Execute OCR for uploaded documents in parallel
+      // Execute OCR for uploaded documents sequentially to optimize CPU thread allocation
       logOcrStep({ traceId, stage: "OCR_STARTED" });
-      const [extractedAadhaar, extractedPAN] = await Promise.all([
-        aadhaarFile ? processImage(aadhaarFile, traceId) : Promise.resolve(null),
-        panFile ? processImage(panFile, traceId) : Promise.resolve(null),
-      ]);
+      const extractedAadhaar = aadhaarFile ? await processImage(aadhaarFile, traceId) : null;
+      const extractedPAN = panFile ? await processImage(panFile, traceId) : null;
 
       logOcrStep({ traceId, stage: "OCR_COMPLETED" });
 

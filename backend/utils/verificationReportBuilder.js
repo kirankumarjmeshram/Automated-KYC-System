@@ -1,5 +1,6 @@
 const { matchNames } = require("./nameMatcher");
 const { generateRecommendations } = require("./recommendationEngine");
+const { normalizeName } = require("../constants/ocrNoiseWords");
 const VerificationStatus = require("../constants/verificationStatus");
 
 /**
@@ -156,7 +157,8 @@ function buildVerificationReport({
       aadhaar: aadhaarDetails
         ? {
             type: aadhaarDetails.type || "Aadhaar",
-            name: aadhaarDetails.name || "",
+            rawName: aadhaarDetails.name || "",
+            name: aadhaarNameMatchResult?.normalizedOCR || normalizeName(aadhaarDetails.name || ""),
             number: aadhaarDetails.number || "",
             dob: aadhaarDetails.dob || "",
             gender: aadhaarDetails.gender || "",
@@ -167,8 +169,9 @@ function buildVerificationReport({
       pan: panDetails
         ? {
             type: panDetails.type || "PAN",
-            name: panDetails.name || "",
-            father_name: panDetails.father_name || "",
+            rawName: panDetails.name || "",
+            name: panNameMatchResult?.normalizedOCR || normalizeName(panDetails.name || ""),
+            father_name: normalizeName(panDetails.father_name || ""),
             number: panDetails.number || "",
             dob: panDetails.dob || "",
             confidence: panConf,

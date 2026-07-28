@@ -74,7 +74,7 @@ const processImageWithAI = async (file, traceId = "internal-trace") => {
         ...formData.getHeaders(),
         "x-trace-id": traceId,
       },
-      timeout: 60000, // 60s timeout for CPU OCR on high-res image uploads
+      timeout: 120000, // 120s timeout for CPU OCR on high-res image uploads
     });
 
     const duration = Date.now() - startTime;

@@ -4,38 +4,9 @@
  * (Aadhaar, PAN, Passport, Driving Licence, Voter ID, etc.)
  */
 
-// Common OCR Noise Words / Garbage Artifacts to filter out during normalization
-const OCR_NOISE_WORDS = new Set([
-  "GF", "DRH", "UIDAI", "INDIA", "GOVT", "GOVERNMENT", "DOB", "MALE", "FEMALE",
-  "SIGNATURE", "YEAR", "QR", "PHOTO", "BHARAT", "SARKAR", "ADDRESS", "PATTA",
-  "DATE", "BIRTH", "FATHER", "MOTHER", "HUSBAND", "NAME", "S/O", "D/O", "W/O", "C/O",
-  "SO", "DO", "WO", "CO", "VID", "CARD", "NUMBER", "UNIQUE", "IDENTIFICATION",
-  "AUTHORITY", "ISSUE", "DOWNLOAD", "INCOME", "TAX", "DEPARTMENT", "PERMANENT",
-  "ACCOUNT", "TNG", "TENN", "HRS", "TNR", "BIGRATURE", "HRT", "HER",
-  "FAT", "TT", "313XY", "313ZR", "H161", "HRCY", "FAFEEZ", "QFERCUT", "QFERCU"
-]);
+const { OCR_NOISE_WORDS: NOISE_ARRAY, normalizeName } = require("../constants/ocrNoiseWords");
 
-/**
- * 1. Robust Name Normalization
- * Converts to uppercase, removes diacritics, strips punctuation/special chars,
- * collapses spaces, and filters out common OCR noise words.
- */
-function normalizeName(rawName) {
-  if (!rawName || typeof rawName !== "string") return "";
-
-  const clean = rawName
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "") // Remove Unicode diacritics
-    .toUpperCase()
-    .replace(/[\.,\-\/#\$%\^&\*;:{}=\-_`~()\\@\+\?]/g, " ") // Replace punctuation with space
-    .replace(/[^A-Z\s]/g, " ") // Replace non-A-Z characters with space
-    .replace(/\s+/g, " ")
-    .trim();
-
-  // Filter out OCR noise words
-  const tokens = clean.split(" ").filter((t) => t.length > 0 && !OCR_NOISE_WORDS.has(t));
-  return tokens.join(" ");
-}
+const OCR_NOISE_WORDS = new Set(NOISE_ARRAY.map((w) => w.toUpperCase()));
 
 /**
  * 2. Tokenization Pipeline

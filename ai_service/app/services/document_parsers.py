@@ -279,7 +279,7 @@ class AadhaarParser:
             if re.search(r"\d", upper):
                 continue
             clean_alpha = re.sub(r"[^A-Z\s\.]", "", upper).strip()
-            words = [w for w in clean_alpha.split() if w not in ("HRT", "HER", "UR", "FRUGPHR", "UPILAR", "L", "FAT", "TT", "XY", "HRCY", "FAFEEZ", "QFERCU", "QFERCUT", "SO", "R", "TERT", "H161", "313XY")]
+            words = [w for w in clean_alpha.split() if w not in ("HRT", "HER", "UR", "FRUGPHR", "UPILAR", "L", "FAT", "TT", "XY", "HRCY", "FAFEEZ", "QFERCU", "QFERCUT", "SO", "R", "TERT", "H161", "313XY", "GF", "DRH")]
             clean_name_part = " ".join(words).strip()
 
             if len(clean_name_part) >= 3:
