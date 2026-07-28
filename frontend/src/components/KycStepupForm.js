@@ -7,7 +7,7 @@ import { generateTraceId, logger } from "../utils/logger";
 const KycStepupForm = () => {
   const [step, setStep] = useState(1);
   const [formData, setFormData] = useState({ name: "", aadhaar: "", pan: "" });
-  const [files, setFiles] = useState({ aadhaarFile: null, panFile: null });
+  const [files, setFiles] = useState({ aadhaarFile: null, panFile: null, selfieFile: null });
   const [verificationResult, setVerificationResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -45,6 +45,9 @@ const KycStepupForm = () => {
     formDataObj.append("pan", formData.pan.trim());
     formDataObj.append("aadhaarFile", files.aadhaarFile);
     formDataObj.append("panFile", files.panFile);
+    if (files.selfieFile) {
+      formDataObj.append("selfieFile", files.selfieFile);
+    }
 
     try {
       const response = await axios.post("http://localhost:5000/api/verify", formDataObj, {
@@ -141,6 +144,11 @@ const KycStepupForm = () => {
               <Form.Group className="mb-3">
                 <Form.Label className="fw-bold">Upload PAN Card Image</Form.Label>
                 <Form.Control type="file" name="panFile" onChange={handleFileChange} required />
+              </Form.Group>
+
+              <Form.Group className="mb-3">
+                <Form.Label className="fw-bold">Upload Selfie Photo <span className="text-muted fw-normal">(Optional for Face Matching)</span></Form.Label>
+                <Form.Control type="file" name="selfieFile" accept="image/*" onChange={handleFileChange} />
               </Form.Group>
 
               {error && <Alert variant="danger" className="mt-3">{error}</Alert>}

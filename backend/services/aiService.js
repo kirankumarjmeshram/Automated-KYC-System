@@ -172,6 +172,10 @@ const processImageWithAI = async (file, traceId = "internal-trace") => {
     }
   } catch (error) {
     const duration = Date.now() - startTime;
+    console.error("===== AI SERVICE RPC EXCEPTION =====");
+    console.error(`Target: ${targetEndpoint}`);
+    console.error(`Error: ${error.message}`);
+    console.error(error.stack);
     logPerformance({ traceId, operation: "AI_SERVICE_RPC_FAILED", durationMs: duration, details: error.message });
     logOcrFailure({
       traceId,
@@ -192,4 +196,60 @@ const processImageWithAI = async (file, traceId = "internal-trace") => {
   }
 };
 
-module.exports = { processImageWithAI };
+/**
+ * Dispatches document image & selfie photo buffers to FastAPI AI Microservice (POST /face/verify).
+ */
+const verifyFaceWithAI = async (docFile, selfieFile, traceId = "internal-trace") => {
+  if (!docFile || !selfieFile || !docFile.buffer || !selfieFile.buffer) {
+    return {
+      verified: false,
+      similarity: 0.0,
+      confidence: 0.0,
+      threshold: 75.0,
+      reason: "Missing document or selfie image buffer."
+    };
+  }
+
+  const aiServiceUrl = process.env.AI_SERVICE_URL || env.AI_SERVICE_URL || "http://localhost:8000";
+  const targetEndpoint = `${aiServiceUrl}/face/verify`;
+
+  try {
+    const FormData = require("form-data");
+    const formData = new FormData();
+    formData.append("documentFile", docFile.buffer, {
+      filename: docFile.originalname || "document.png",
+      contentType: docFile.mimetype || "image/png",
+    });
+    formData.append("selfieFile", selfieFile.buffer, {
+      filename: selfieFile.originalname || "selfie.png",
+      contentType: selfieFile.mimetype || "image/png",
+    });
+
+    const response = await axios.post(targetEndpoint, formData, {
+      headers: {
+        ...formData.getHeaders(),
+        "x-trace-id": traceId,
+      },
+      timeout: 30000,
+    });
+
+    return response.data?.faceVerification || {
+      verified: false,
+      similarity: 0.0,
+      confidence: 0.0,
+      threshold: 75.0,
+      reason: "Invalid response from AI face verification service."
+    };
+  } catch (err) {
+    logger.warn(`Face verification service error: ${err.message}`, { traceId });
+    return {
+      verified: false,
+      similarity: 0.0,
+      confidence: 0.0,
+      threshold: 75.0,
+      reason: `Face verification service unavailable: ${err.message}`
+    };
+  }
+};
+
+module.exports = { processImageWithAI, verifyFaceWithAI };

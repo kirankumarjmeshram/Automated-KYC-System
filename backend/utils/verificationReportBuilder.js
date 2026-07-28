@@ -16,6 +16,7 @@ function buildVerificationReport({
   submittedData = {},
   extractedAadhaar = null,
   extractedPAN = null,
+  faceVerification = null,
   mismatches = [],
   pipelineErrors = [],
   pipelineWarnings = [],
@@ -29,6 +30,12 @@ function buildVerificationReport({
   const nameSub = submittedData.name || "";
   const aadhaarSub = submittedData.aadhaar || "";
   const panSub = submittedData.pan || "";
+
+  // Compute Face Verification Statuses
+  const faceVerified = Boolean(faceVerification?.verified);
+  const facePipelineStatus = faceVerification
+    ? (faceVerification.verified ? "SUCCESS" : "MISMATCH")
+    : "PENDING";
 
   // 1. Process Aadhaar Name Matching via Enterprise Name Engine
   const aadhaarDetails = extractedAadhaar?.details || null;
@@ -142,7 +149,7 @@ function buildVerificationReport({
       overallVerified: verified,
       aadhaarVerified: aadhaarStatus === VerificationStatus.VERIFIED,
       panVerified: panStatus === VerificationStatus.VERIFIED,
-      faceVerified: false,
+      faceVerified,
       livenessVerified: false,
       manualReviewRequired: status === VerificationStatus.MANUAL_REVIEW || aadhaarStatus === VerificationStatus.MANUAL_REVIEW || panStatus === VerificationStatus.MANUAL_REVIEW,
     },
@@ -242,9 +249,11 @@ function buildVerificationReport({
       ocr: status === VerificationStatus.OCR_UNAVAILABLE ? "SKIPPED" : (status === VerificationStatus.OCR_FAILED ? "FAILED" : "SUCCESS"),
       gemini: status === VerificationStatus.OCR_UNAVAILABLE ? "SKIPPED" : "SUCCESS",
       dataMatching: status === VerificationStatus.VERIFIED ? "SUCCESS" : (status === VerificationStatus.REJECTED ? "MISMATCH" : "SKIPPED"),
-      faceVerification: "PENDING",
+      faceVerification: facePipelineStatus,
       liveness: "PENDING",
     },
+
+    faceVerification: faceVerification || null,
 
     errors: finalErrors,
     warnings: finalWarnings,

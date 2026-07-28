@@ -1,6 +1,6 @@
 const express = require("express");
 const multer = require("multer");
-const { processImage } = require("../controllers/documentController");
+const { processImage, processImageWithAI, verifyFaceWithAI } = require("../controllers/documentController");
 const VerificationStatus = require("../constants/verificationStatus");
 const logger = require("../logger");
 const {
@@ -26,6 +26,7 @@ router.post(
   upload.fields([
     { name: "aadhaarFile", maxCount: 1 },
     { name: "panFile", maxCount: 1 },
+    { name: "selfieFile", maxCount: 1 },
     { name: "file", maxCount: 1 },
   ]),
   async (req, res) => {
@@ -68,6 +69,16 @@ router.post(
 
       const aadhaarFile = req.files?.aadhaarFile ? req.files.aadhaarFile[0] : (req.files?.file ? req.files.file[0] : null);
       const panFile = req.files?.panFile ? req.files.panFile[0] : null;
+      const selfieFile = req.files?.selfieFile ? req.files.selfieFile[0] : null;
+
+      console.log("===== EXPRESS =====");
+      console.log("Received req.files:", req.files ? Object.keys(req.files) : null);
+      console.log("Field names:", req.files ? Object.keys(req.files) : []);
+      console.log("File sizes:", {
+        aadhaarFile: aadhaarFile ? `${aadhaarFile.originalname} (${aadhaarFile.size} bytes)` : null,
+        panFile: panFile ? `${panFile.originalname} (${panFile.size} bytes)` : null,
+        selfieFile: selfieFile ? `${selfieFile.originalname} (${selfieFile.size} bytes)` : null,
+      });
 
       if (!aadhaarFile && !panFile) {
         addTimelineStep(VerificationStatus.REJECTED);
@@ -95,6 +106,17 @@ router.post(
       logOcrStep({ traceId, stage: "OCR_STARTED" });
       const extractedAadhaar = aadhaarFile ? await processImage(aadhaarFile, traceId) : null;
       const extractedPAN = panFile ? await processImage(panFile, traceId) : null;
+
+      // Execute Face Verification ONLY if selfieFile is uploaded
+      let faceVerification = null;
+      if (selfieFile) {
+        const targetDocFile = aadhaarFile || panFile;
+        if (targetDocFile) {
+          logOcrStep({ traceId, stage: "FACE_VERIFICATION_STARTED" });
+          faceVerification = await verifyFaceWithAI(targetDocFile, selfieFile, traceId);
+          logOcrStep({ traceId, stage: "FACE_VERIFICATION_COMPLETED", message: `Similarity=${faceVerification?.similarity}% Verified=${faceVerification?.verified}` });
+        }
+      }
 
       logOcrStep({ traceId, stage: "OCR_COMPLETED" });
 
@@ -310,6 +332,7 @@ router.post(
         submittedData: formData,
         extractedAadhaar,
         extractedPAN,
+        faceVerification,
         timeline,
       });
 

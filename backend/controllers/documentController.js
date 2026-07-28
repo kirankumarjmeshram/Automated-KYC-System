@@ -2,7 +2,7 @@ const vision = require("@google-cloud/vision");
 const sharp = require("sharp");
 const logger = require("../logger");
 const { logOcrStep, logPerformance } = require("../logger");
-const { processImageWithAI } = require("../services/aiService");
+const { processImageWithAI, verifyFaceWithAI } = require("../services/aiService");
 const VerificationStatus = require("../constants/verificationStatus");
 
 let client = null;
@@ -140,4 +140,4 @@ const extractDetailsFromText = (extractedText) => {
   return details.type ? details : null;
 };
 
-module.exports = { processImage };
+module.exports = { processImage, processImageWithAI, verifyFaceWithAI };

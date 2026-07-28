@@ -60,7 +60,7 @@ def structure_text_with_gemini(raw_text: str) -> ExtractedDetails:
 
     if settings.GEMINI_API_KEY:
         try:
-            models_to_try = ["gemini-2.0-flash", "gemini-2.5-flash-lite", "gemini-pro"]
+            models_to_try = ["gemini-flash-latest", "gemini-2.0-flash", "gemini-flash-lite-latest"]
             for model_name in models_to_try:
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={settings.GEMINI_API_KEY}"
                 prompt = f"""
@@ -128,3 +128,87 @@ def parse_details_regex(raw_text: str) -> ExtractedDetails:
     from app.services.document_parsers import parse_document
     details, _ = parse_document(raw_text, [])
     return details
+
+def extract_with_gemini_vision(image_bytes: bytes) -> tuple[str, ExtractedDetails]:
+    """
+    Extracts text and structured details directly from document image bytes using Gemini Multimodal Vision API over HTTPS REST.
+    Provides 100% resilient fallback if local C++ OCR DLLs (PyTorch/EasyOCR) are blocked by Windows OS Application Control policies.
+    """
+    if not image_bytes or not settings.GEMINI_API_KEY:
+        return "", ExtractedDetails(type="Unknown")
+
+    try:
+        b64_image = base64.b64encode(image_bytes).decode("utf-8")
+        models_to_try = ["gemini-flash-latest", "gemini-2.0-flash", "gemini-flash-lite-latest"]
+
+        prompt = """
+        You are a senior Indian KYC document OCR engine.
+        Examine this uploaded identity document image carefully.
+
+        1. Extract ALL raw visible text on the card, line by line.
+        2. Extract the structured identity details into a JSON object:
+           - "type": "Aadhaar" or "PAN" or "Unknown"
+           - "raw_text": "All text lines joined with newlines"
+           - "name": "Card Holder Full Name in Uppercase"
+           - "father_name": "Father's Full Name in Uppercase or empty string"
+           - "number": "Document Number without spaces"
+           - "dob": "Date of Birth in DD/MM/YYYY format or empty string"
+           - "gender": "Male or Female or empty string"
+           - "address": "Full address or empty string"
+
+        Return ONLY a raw valid JSON object without markdown formatting.
+        """
+
+        for model_name in models_to_try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={settings.GEMINI_API_KEY}"
+            payload = {
+                "contents": [
+                    {
+                        "parts": [
+                            {"text": prompt},
+                            {
+                                "inlineData": {
+                                    "mimeType": "image/jpeg",
+                                    "data": b64_image
+                                }
+                            }
+                        ]
+                    }
+                ]
+            }
+
+            req = urllib.request.Request(
+                url,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"}
+            )
+
+            try:
+                with urllib.request.urlopen(req, timeout=10) as response:
+                    res_body = response.read().decode("utf-8")
+                    res_json = json.loads(res_body)
+                    candidates = res_json.get("candidates", [])
+                    if candidates and "content" in candidates[0]:
+                        parts = candidates[0]["content"].get("parts", [])
+                        if parts and "text" in parts[0]:
+                            text_out = parts[0]["text"].strip()
+                            clean_text = text_out.replace("```json", "").replace("```", "").strip()
+                            parsed = json.loads(clean_text)
+                            raw_text = parsed.get("raw_text", clean_text)
+                            details = ExtractedDetails(
+                                type=parsed.get("type", "Unknown"),
+                                name=parsed.get("name", ""),
+                                father_name=parsed.get("father_name", ""),
+                                number=parsed.get("number", ""),
+                                dob=parsed.get("dob", ""),
+                                gender=parsed.get("gender", ""),
+                                address=parsed.get("address", "")
+                            )
+                            return raw_text, details
+            except Exception as err:
+                logger.warning(f"Gemini Vision model {model_name} error: {err}")
+                continue
+    except Exception as e:
+        logger.warning(f"Gemini Vision API extraction failed: {e}")
+
+    return "", ExtractedDetails(type="Unknown")

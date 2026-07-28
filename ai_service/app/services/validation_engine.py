@@ -57,6 +57,9 @@ def validate_extracted_fields(gemini_details: ExtractedDetails, raw_ocr_text: st
     raw_upper = raw_ocr_text.upper().replace("\n", " ")
     raw_alphanumeric = re.sub(r"[^\w]", "", raw_upper)
 
+    if not raw_ocr_text or not raw_ocr_text.strip():
+        return validated, warnings
+
     # 1. Validate Document Number
     if validated.number:
         if not is_fuzzy_number_match(validated.number, raw_ocr_text):

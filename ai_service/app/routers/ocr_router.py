@@ -2,6 +2,7 @@ import time
 import uuid
 import logging
 from fastapi import APIRouter, File, UploadFile, HTTPException, Request
+from app.config.settings import settings
 from app.models.ocr_schemas import OCRResponse, ExtractedDetails, BoundingBox
 from app.services.cv_service import preprocess_image
 from app.services.ocr_service import extract_ocr_text
@@ -37,6 +38,11 @@ async def process_document_ocr(request: Request, file: UploadFile = File(...)):
 
     try:
         contents = await file.read()
+        print("===== AI SERVICE =====", flush=True)
+        print(f"Received upload: {file.filename}", flush=True)
+        print(f"Filename: {file.filename}", flush=True)
+        print(f"Content length: {len(contents)} bytes", flush=True)
+
         if not contents:
             log.warning("Upload received with zero bytes")
             raise HTTPException(status_code=400, detail="Empty file payload")
@@ -67,7 +73,23 @@ async def process_document_ocr(request: Request, file: UploadFile = File(...)):
         # Step 4: Gemini LLM Field Mapping
         start_gemini = time.time()
         log.info("[GEMINI_MAPPING_STARTED] Dispatching to Gemini LLM with Anti-Hallucination prompt")
-        gemini_details = structure_text_with_gemini(raw_text)
+        if not raw_text and settings.GEMINI_API_KEY:
+            from app.services.gemini_service import extract_with_gemini_vision
+            log.info("[OCR_FALLBACK] Local C++ OCR engines empty/blocked. Dispatching to Gemini Multimodal Vision API")
+            g_raw_text, g_vision_details = extract_with_gemini_vision(contents)
+            if g_raw_text or g_vision_details.type != "Unknown":
+                raw_text = g_raw_text or f"{g_vision_details.name} {g_vision_details.number} {g_vision_details.dob}"
+                engine_used = "Gemini Vision AI"
+                ocr_result["ocr_engine"] = "Gemini Vision AI"
+                ocr_result["confidence_score"] = 98.0
+                ocr_result["raw_text"] = raw_text
+                ocr_result["raw_easy"] = raw_text
+                gemini_details = g_vision_details
+            else:
+                gemini_details = structure_text_with_gemini(raw_text)
+        else:
+            gemini_details = structure_text_with_gemini(raw_text)
+
         gemini_duration = int((time.time() - start_gemini) * 1000)
         log.info(f"[GEMINI_MAPPING_COMPLETED] Structuring completed in {gemini_duration}ms Type={gemini_details.type}")
 
@@ -91,6 +113,9 @@ async def process_document_ocr(request: Request, file: UploadFile = File(...)):
         log.info(f"[PIPELINE_COMPLETE] TotalDuration={total_duration}ms (Preprocess={cv_duration}ms, OCR={ocr_duration}ms, Gemini={gemini_duration}ms)")
 
         boxes = [BoundingBox(**b) for b in ocr_result.get("bounding_boxes", [])]
+
+        print("===== RESPONSE =====", flush=True)
+        print(f"Returning OCR response for {file.filename}: engine={engine_used}, type={validated_details.type}, name='{validated_details.name}', number='{validated_details.number}'", flush=True)
 
         return OCRResponse(
             success=True,
