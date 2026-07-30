@@ -17,8 +17,12 @@ connectDB();
 // Mount Request Trace ID & Performance Middleware
 app.use(requestLogger);
 
-// HTTP Security Headers
-app.use(helmet());
+// HTTP Security Headers (Allowing Cross-Origin Resource Loading for Verification Assets)
+app.use(
+  helmet({
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+  })
+);
 
 // Strict CORS Configuration (support localhost:3000 and custom origin)
 const allowedOrigins = [env.CORS_ORIGIN, "http://localhost:3000", "http://localhost:3001"];
@@ -61,6 +65,10 @@ app.get("/health", (req, res) => {
     traceId: req.traceId,
   });
 });
+
+// Static Asset Serving for Verification Images (Public Development Mode)
+const path = require("path");
+app.use("/verification-assets", express.static(path.join(__dirname, "public", "verification-assets")));
 
 // API Routes (Mounted under /api)
 app.use("/api", documentRoutes);

@@ -49,6 +49,12 @@ const KycStepupForm = () => {
       formDataObj.append("selfieFile", files.selfieFile);
     }
 
+    const localPreviews = {
+      aadhaar: files.aadhaarFile ? URL.createObjectURL(files.aadhaarFile) : null,
+      pan: files.panFile ? URL.createObjectURL(files.panFile) : null,
+      selfie: files.selfieFile ? URL.createObjectURL(files.selfieFile) : null,
+    };
+
     try {
       const response = await axios.post("http://localhost:5000/api/verify", formDataObj, {
         headers: {
@@ -65,7 +71,7 @@ const KycStepupForm = () => {
         duration: `${duration}ms`,
       });
 
-      setVerificationResult(response.data);
+      setVerificationResult({ ...response.data, _uploadedPreviews: localPreviews });
     } catch (err) {
       const duration = Date.now() - startTime;
       if (err.response && err.response.data) {
@@ -75,7 +81,7 @@ const KycStepupForm = () => {
           error: err.response.data.message || err.response.data.error,
           duration: `${duration}ms`,
         });
-        setVerificationResult(err.response.data);
+        setVerificationResult({ ...err.response.data, _uploadedPreviews: localPreviews });
       } else {
         logger.error("Network or unexpected server error", { traceId, error: err.message, duration: `${duration}ms` });
         setError("Network error. Could not connect to verification server.");

@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 import logging
+import base64
 
 logger = logging.getLogger(__name__)
 
@@ -84,10 +85,18 @@ def compute_face_feature_vector(face_img: np.ndarray) -> np.ndarray:
     norm = np.linalg.norm(embedding)
     return embedding / norm if norm > 0 else embedding
 
+def encode_crop_to_base64(crop_img: np.ndarray) -> str:
+    if crop_img is None or crop_img.size == 0:
+        return None
+    success, buffer = cv2.imencode('.jpg', crop_img)
+    if not success:
+        return None
+    return base64.b64encode(buffer).decode('utf-8')
+
 def verify_faces(doc_image_bytes: bytes, selfie_image_bytes: bytes) -> dict:
     """
     Compares cardholder photo from document against selfie image.
-    Returns similarity score, confidence, and verification decision.
+    Returns similarity score, confidence, verification decision, and base64 face crops.
     """
     if not doc_image_bytes or not selfie_image_bytes:
         return {
@@ -95,11 +104,16 @@ def verify_faces(doc_image_bytes: bytes, selfie_image_bytes: bytes) -> dict:
             "similarity": 0.0,
             "confidence": 0.0,
             "threshold": 75.0,
-            "reason": "Missing document photo or selfie image."
+            "reason": "Missing document photo or selfie image.",
+            "doc_face_crop": None,
+            "selfie_face_crop": None
         }
 
     doc_crop = detect_and_crop_face(doc_image_bytes)
     selfie_crop = detect_and_crop_face(selfie_image_bytes)
+
+    doc_b64 = encode_crop_to_base64(doc_crop)
+    selfie_b64 = encode_crop_to_base64(selfie_crop)
 
     if doc_crop is None or selfie_crop is None:
         return {
@@ -107,7 +121,9 @@ def verify_faces(doc_image_bytes: bytes, selfie_image_bytes: bytes) -> dict:
             "similarity": 0.0,
             "confidence": 0.0,
             "threshold": 75.0,
-            "reason": "Could not detect facial features in provided images."
+            "reason": "Could not detect facial features in provided images.",
+            "doc_face_crop": doc_b64,
+            "selfie_face_crop": selfie_b64
         }
 
     vec_doc = compute_face_feature_vector(doc_crop)
@@ -119,7 +135,9 @@ def verify_faces(doc_image_bytes: bytes, selfie_image_bytes: bytes) -> dict:
             "similarity": 0.0,
             "confidence": 0.0,
             "threshold": 75.0,
-            "reason": "Failed to extract facial embedding vectors."
+            "reason": "Failed to extract facial embedding vectors.",
+            "doc_face_crop": doc_b64,
+            "selfie_face_crop": selfie_b64
         }
 
     # Cosine Similarity between feature vectors
@@ -143,5 +161,7 @@ def verify_faces(doc_image_bytes: bytes, selfie_image_bytes: bytes) -> dict:
         "similarity": similarity_score,
         "confidence": similarity_score,
         "threshold": threshold,
-        "reason": reason
+        "reason": reason,
+        "doc_face_crop": doc_b64,
+        "selfie_face_crop": selfie_b64
     }

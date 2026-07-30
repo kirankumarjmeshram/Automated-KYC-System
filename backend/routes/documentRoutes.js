@@ -71,6 +71,36 @@ router.post(
       const panFile = req.files?.panFile ? req.files.panFile[0] : null;
       const selfieFile = req.files?.selfieFile ? req.files.selfieFile[0] : null;
 
+      // Save verification assets immediately to backend/public/verification-assets/{traceId}/
+      const path = require("path");
+      const fs = require("fs");
+      const assetsDir = path.join(__dirname, "..", "public", "verification-assets", traceId);
+      fs.mkdirSync(assetsDir, { recursive: true });
+
+      const documentAssets = {
+        aadhaar: { original_image: null, ocr_crop: null, face_crop: null, fileName: aadhaarFile?.originalname || "aadhaar_card.jpg", size: aadhaarFile ? `${(aadhaarFile.size / 1024).toFixed(1)} KB` : "104 KB" },
+        pan: { original_image: null, ocr_crop: null, face_crop: null, fileName: panFile?.originalname || "pan_card.jpg", size: panFile ? `${(panFile.size / 1024).toFixed(1)} KB` : "84 KB" },
+        selfie: { original_image: null, face_crop: null }
+      };
+
+      if (aadhaarFile) {
+        const origPath = path.join(assetsDir, "aadhaar_original.jpg");
+        fs.writeFileSync(origPath, aadhaarFile.buffer);
+        documentAssets.aadhaar.original_image = `/verification-assets/${traceId}/aadhaar_original.jpg`;
+      }
+
+      if (panFile) {
+        const origPath = path.join(assetsDir, "pan_original.jpg");
+        fs.writeFileSync(origPath, panFile.buffer);
+        documentAssets.pan.original_image = `/verification-assets/${traceId}/pan_original.jpg`;
+      }
+
+      if (selfieFile) {
+        const origPath = path.join(assetsDir, "selfie_original.jpg");
+        fs.writeFileSync(origPath, selfieFile.buffer);
+        documentAssets.selfie.original_image = `/verification-assets/${traceId}/selfie_original.jpg`;
+      }
+
       console.log("===== EXPRESS =====");
       console.log("Received req.files:", req.files ? Object.keys(req.files) : null);
       console.log("Field names:", req.files ? Object.keys(req.files) : []);
@@ -92,6 +122,7 @@ router.post(
           startTime: requestStart,
           submittedData: formData,
           mismatches: ["No document files uploaded"],
+          documentAssets,
           timeline,
         });
 
@@ -119,6 +150,33 @@ router.post(
       }
 
       logOcrStep({ traceId, stage: "OCR_COMPLETED" });
+
+      // Attach OCR and Face Crops to documentAssets if available
+      if (extractedAadhaar?.ocr_crop) {
+        const ocrPath = path.join(assetsDir, "aadhaar_ocr_crop.jpg");
+        fs.writeFileSync(ocrPath, Buffer.from(extractedAadhaar.ocr_crop, "base64"));
+        documentAssets.aadhaar.ocr_crop = `/verification-assets/${traceId}/aadhaar_ocr_crop.jpg`;
+      }
+
+      if (extractedPAN?.ocr_crop) {
+        const ocrPath = path.join(assetsDir, "pan_ocr_crop.jpg");
+        fs.writeFileSync(ocrPath, Buffer.from(extractedPAN.ocr_crop, "base64"));
+        documentAssets.pan.ocr_crop = `/verification-assets/${traceId}/pan_ocr_crop.jpg`;
+      }
+
+      if (faceVerification?.doc_face_crop) {
+        const faceFileName = aadhaarFile ? "aadhaar_face.jpg" : "pan_face.jpg";
+        const facePath = path.join(assetsDir, faceFileName);
+        fs.writeFileSync(facePath, Buffer.from(faceVerification.doc_face_crop, "base64"));
+        if (aadhaarFile) documentAssets.aadhaar.face_crop = `/verification-assets/${traceId}/${faceFileName}`;
+        else documentAssets.pan.face_crop = `/verification-assets/${traceId}/${faceFileName}`;
+      }
+
+      if (faceVerification?.selfie_face_crop) {
+        const facePath = path.join(assetsDir, "selfie_face.jpg");
+        fs.writeFileSync(facePath, Buffer.from(faceVerification.selfie_face_crop, "base64"));
+        documentAssets.selfie.face_crop = `/verification-assets/${traceId}/selfie_face.jpg`;
+      }
 
       // Log RAW OCR text & Parsed Data if available
       if (extractedPAN) {
@@ -175,6 +233,8 @@ router.post(
           submittedData: formData,
           extractedAadhaar,
           extractedPAN,
+          faceVerification,
+          documentAssets,
           timeline,
         });
 
@@ -199,6 +259,8 @@ router.post(
           submittedData: formData,
           extractedAadhaar,
           extractedPAN,
+          faceVerification,
+          documentAssets,
           pipelineErrors: ["Could not extract legible identity text from uploaded files."],
           timeline,
         });
@@ -290,6 +352,8 @@ router.post(
           submittedData: formData,
           extractedAadhaar,
           extractedPAN,
+          faceVerification,
+          documentAssets,
           mismatches,
           timeline,
         });
@@ -311,6 +375,8 @@ router.post(
           submittedData: formData,
           extractedAadhaar,
           extractedPAN,
+          faceVerification,
+          documentAssets,
           pipelineWarnings: ["Name matching rule flagged for manual review."],
           timeline,
         });
@@ -333,6 +399,7 @@ router.post(
         extractedAadhaar,
         extractedPAN,
         faceVerification,
+        documentAssets,
         timeline,
       });
 

@@ -12,10 +12,22 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 CHANGELOG.md
 IMPLEMENTATION_REPORT.md
 imp.txt
-scratch
-# Runtime data
-pids
-*.pid
+scratch/
+scratch/*
+
+# Sensitive Data & Assets
+backend/public/verification-assets/
+public/verification-assets/
+verification-assets/
+uploads/
+*.env
+*.env.*
+*.key
+*.pem
+service-account-key.json
+ai_service/venv/
+ai_service/__pycache__/
+__pycache__/
 *.seed
 *.pid.lock
 

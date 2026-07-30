@@ -136,6 +136,7 @@ async def process_document_ocr(request: Request, file: UploadFile = File(...)):
             image_metadata=img_meta,
             ocr_engine=engine_used,
             bounding_boxes=boxes,
+            ocr_crop=ocr_result.get("ocr_crop"),
             fallback=ocr_result["using_fallback"],
             message=f"OCR processed successfully via {engine_used}"
         )

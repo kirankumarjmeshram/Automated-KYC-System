@@ -44,39 +44,55 @@ def get_easyocr_engine():
             easyocr_engine = None
     return easyocr_engine
 
+def encode_cv2_image_b64(img: np.ndarray) -> str:
+    if img is None or img.size == 0:
+        return None
+    try:
+        import cv2
+        import base64
+        success, buffer = cv2.imencode('.jpg', img)
+        if not success:
+            return None
+        return base64.b64encode(buffer).decode('utf-8')
+    except Exception:
+        return None
+
 def extract_ocr_text(processed_img: np.ndarray, file_name: str = "") -> dict:
     """
-    Executes PaddleOCR & EasyOCR engines and logs engine configuration,
-    complete unsummarized raw outputs, bounding boxes, and per-line confidence.
+    Executes PaddleOCR & EasyOCR engines and returns fused text, raw outputs,
+    bounding boxes, and base64 crop.
     """
+    paddle = get_paddle_engine()
+    easy_reader = get_easyocr_engine()
+
     paddle_boxes = []
     easy_boxes = []
-
     raw_paddle_objects = []
     raw_easyocr_objects = []
-
-    # EasyOCR Engine Info
-    easy_reader = get_easyocr_engine()
-    model_dir = os.path.expanduser("~/.EasyOCR/model")
     engine_info = {
-        "engine": "EasyOCR",
+        "engine": "EasyOCR/PaddleOCR",
         "version": easyocr_version,
         "languages": ["en"],
         "gpu_enabled": False,
-        "model_path": model_dir,
+        "model_path": os.path.expanduser("~/.EasyOCR/model"),
         "configuration": {"verbose": False, "gpu": False},
+        "paddle_available": paddle is not None,
+        "easyocr_available": easy_reader is not None,
     }
 
-    print("===== OCR =====", flush=True)
+    print("===== OCR ENGINE RUN =====", flush=True)
+
     # 1. PaddleOCR Engine
     try:
         print("Starting PaddleOCR", flush=True)
-        paddle = get_paddle_engine()
         if paddle:
-            result = paddle.ocr(processed_img)
-            raw_paddle_objects = result
-            if result and result[0]:
-                for line in result[0]:
+            try:
+                p_res = paddle.ocr(processed_img)
+            except TypeError:
+                p_res = paddle.ocr(processed_img, cls=True)
+            raw_paddle_objects = p_res
+            if p_res and p_res[0]:
+                for line in p_res[0]:
                     box, (text, conf) = line
                     top_y = float(box[0][1]) if isinstance(box, list) and len(box) > 0 else 0.0
                     paddle_boxes.append({"top_y": top_y, "text": text.strip(), "confidence": float(conf), "box": box})
@@ -91,7 +107,6 @@ def extract_ocr_text(processed_img: np.ndarray, file_name: str = "") -> dict:
         print("Starting EasyOCR", flush=True)
         if easy_reader:
             easy_result = easy_reader.readtext(processed_img)
-            # Serialize numpy coordinates inside raw_easyocr_objects
             if easy_result:
                 for item in easy_result:
                     box, text, conf = item
@@ -107,7 +122,7 @@ def extract_ocr_text(processed_img: np.ndarray, file_name: str = "") -> dict:
 
     # 3. Fuse Results
     fused = fuse_ocr_results(paddle_boxes, easy_boxes)
-    print(f"Merged OCR text length: {len(fused.get('raw_text', ''))}", flush=True)
+    print(f"Merged OCR text length: {len(fused.get('fused_text', ''))}", flush=True)
 
     # Construct per-line confidence strings
     per_line_confidence = []
@@ -119,15 +134,16 @@ def extract_ocr_text(processed_img: np.ndarray, file_name: str = "") -> dict:
         })
 
     return {
-        "raw_text": fused["fused_text"],
+        "raw_text": fused.get("fused_text", ""),
         "raw_paddle": "\n".join([b["text"] for b in paddle_boxes]),
         "raw_easy": "\n".join([b["text"] for b in easy_boxes]),
         "raw_paddle_objects": raw_paddle_objects,
         "raw_easyocr_objects": raw_easyocr_objects,
         "engine_info": engine_info,
         "per_line_confidence": per_line_confidence,
-        "ocr_engine": fused["engine"],
-        "confidence_score": fused["confidence"],
-        "bounding_boxes": fused["fused_boxes"],
-        "using_fallback": fused["engine"] == "none",
+        "ocr_engine": fused.get("engine", "none"),
+        "confidence_score": fused.get("confidence", 0),
+        "bounding_boxes": fused.get("fused_boxes", []),
+        "ocr_crop": encode_cv2_image_b64(processed_img),
+        "using_fallback": fused.get("engine", "none") == "none",
     }

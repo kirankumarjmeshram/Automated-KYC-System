@@ -34,5 +34,6 @@ class OCRResponse(BaseModel):
     image_metadata: Optional[Dict[str, Any]] = Field(default_factory=dict)
     ocr_engine: str = Field(default="none")
     bounding_boxes: List[BoundingBox] = Field(default_factory=list)
+    ocr_crop: Optional[str] = Field(default=None)
     fallback: bool = Field(default=False)
     message: Optional[str] = None
