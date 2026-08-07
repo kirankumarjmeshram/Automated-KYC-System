@@ -35,8 +35,16 @@ app.use(
       return callback(null, true);
     },
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
-    allowedHeaders: ["Content-Type", "Authorization", "x-trace-id", "traceid"],
-    exposedHeaders: ["x-trace-id"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "Accept",
+      "x-trace-id",
+      "traceid",
+      "x-session-id",
+      "x-verification-session-id"
+    ],
+    exposedHeaders: ["x-trace-id", "x-session-id"],
     credentials: true,
   })
 );
