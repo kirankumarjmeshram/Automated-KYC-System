@@ -74,7 +74,7 @@ const processImageWithAI = async (file, traceId = "internal-trace") => {
         ...formData.getHeaders(),
         "x-trace-id": traceId,
       },
-      timeout: 120000, // 120s timeout for CPU OCR on high-res image uploads
+      timeout: 300000, // 300s timeout — first call loads PaddleOCR+EasyOCR models (~2-3min on CPU)
     });
 
     const duration = Date.now() - startTime;
@@ -230,7 +230,7 @@ const verifyFaceWithAI = async (docFile, selfieFile, traceId = "internal-trace")
         ...formData.getHeaders(),
         "x-trace-id": traceId,
       },
-      timeout: 30000,
+      timeout: 120000, // 120s — first call loads face detection models
     });
 
     return response.data?.faceVerification || {

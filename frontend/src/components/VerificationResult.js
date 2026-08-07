@@ -141,6 +141,30 @@ const VerificationResult = ({ data }) => {
 
   const docFaceCrop = resolveSrc(faceVerif?.doc_face_crop, aadhaarFace || panFace);
 
+  // Debug: Log resolved image sources (check browser console)
+  console.log("[KYC-DEBUG] Image Sources Resolved:", {
+    selfieOrig: selfieOrig ? selfieOrig.substring(0, 80) + "..." : null,
+    selfieFace: selfieFace ? selfieFace.substring(0, 80) + "..." : null,
+    docFaceCrop: docFaceCrop ? docFaceCrop.substring(0, 80) + "..." : null,
+    aadhaarOrig: aadhaarOrig ? aadhaarOrig.substring(0, 80) + "..." : null,
+    aadhaarFace: aadhaarFace ? aadhaarFace.substring(0, 80) + "..." : null,
+    panOrig: panOrig ? panOrig.substring(0, 80) + "..." : null,
+    panFace: panFace ? panFace.substring(0, 80) + "..." : null,
+  });
+  console.log("[KYC-DEBUG] Raw API data.documents:", JSON.stringify({
+    aadhaar_orig: docAssets.aadhaar?.original_image,
+    aadhaar_face: docAssets.aadhaar?.face_crop,
+    pan_orig: docAssets.pan?.original_image,
+    selfie_orig: docAssets.selfie?.original_image,
+    selfie_face: docAssets.selfie?.face_crop,
+  }));
+  console.log("[KYC-DEBUG] Raw API faceVerification:", faceVerif ? {
+    doc_face_crop: faceVerif.doc_face_crop ? faceVerif.doc_face_crop.substring(0, 40) + "..." : null,
+    selfie_face_crop: faceVerif.selfie_face_crop ? faceVerif.selfie_face_crop.substring(0, 40) + "..." : null,
+    verified: faceVerif.verified,
+    similarity: faceVerif.similarity,
+  } : "null");
+
   // Alert variant determination
   let alertVariant = "danger";
   if (isVerified && status === "VERIFIED") alertVariant = "success";
