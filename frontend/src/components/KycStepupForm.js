@@ -51,13 +51,8 @@ const KycStepupForm = () => {
         return;
       }
     } else if (step === 2) {
-      if (!files.aadhaarFile) {
-        setError("Please upload your Aadhaar Card document image.");
-        return;
-      }
-    } else if (step === 3) {
-      if (!files.panFile) {
-        setError("Please upload your PAN Card document image.");
+      if (!files.aadhaarFile || !files.panFile) {
+        setError("Please upload both your Aadhaar Card and PAN Card document images.");
         return;
       }
     }
@@ -80,8 +75,8 @@ const KycStepupForm = () => {
       selfieFileObj = dataURLtoFile(bestFrame, `live_best_frame_${Date.now()}.jpg`);
     }
 
-    // Move to Step 5: AI Pipeline Execution (Camera Stream Destroyed & Released)
-    setStep(5);
+    // Move to Step 4: AI Pipeline Execution (Camera Stream Destroyed & Released)
+    setStep(4);
     setIsProcessing(true);
     executeBackendVerification(selfieFileObj, bestFrame);
   };
@@ -132,7 +127,7 @@ const KycStepupForm = () => {
       setTimeout(() => {
         setIsProcessing(false);
         setVerificationResult({ ...response.data, _uploadedPreviews: localPreviews });
-        setStep(6); // Step 6: Verification Result Screen
+        setStep(5); // Step 5: Verification Result Screen
       }, 1200);
 
     } catch (err) {
@@ -147,11 +142,11 @@ const KycStepupForm = () => {
           duration: `${duration}ms`,
         });
         setVerificationResult({ ...err.response.data, _uploadedPreviews: localPreviews });
-        setStep(6);
+        setStep(5);
       } else {
         logger.error("Network or unexpected server error", { traceId, error: err.message, duration: `${duration}ms` });
         setError("Network error. Could not connect to verification server.");
-        setStep(4); // Fallback back to camera step
+        setStep(3); // Fallback back to camera step
       }
     }
   };
@@ -180,19 +175,18 @@ const KycStepupForm = () => {
       </div>
 
       {/* Step Wizard Progress Bar */}
-      {step <= 4 && (
+      {step <= 3 && (
         <Card className="border-0 shadow-sm mb-4">
           <Card.Body className="p-3">
             <div className="d-flex justify-content-between align-items-center mb-2">
               <span className={`small fw-bold ${step >= 1 ? "text-primary" : "text-muted"}`}>1. Applicant Details</span>
-              <span className={`small fw-bold ${step >= 2 ? "text-primary" : "text-muted"}`}>2. Aadhaar Upload</span>
-              <span className={`small fw-bold ${step >= 3 ? "text-primary" : "text-muted"}`}>3. PAN Upload</span>
-              <span className={`small fw-bold ${step >= 4 ? "text-primary" : "text-muted"}`}>4. Live Facial Verification</span>
+              <span className={`small fw-bold ${step >= 2 ? "text-primary" : "text-muted"}`}>2. Document Upload (Aadhaar & PAN)</span>
+              <span className={`small fw-bold ${step >= 3 ? "text-primary" : "text-muted"}`}>3. Live Facial Verification</span>
             </div>
             <div className="progress" style={{ height: "6px" }}>
               <div
                 className="progress-bar bg-primary progress-bar-striped progress-bar-animated"
-                style={{ width: `${(step / 4) * 100}%` }}
+                style={{ width: `${(step / 3) * 100}%` }}
               />
             </div>
           </Card.Body>
@@ -253,80 +247,73 @@ const KycStepupForm = () => {
               </Row>
 
               <Button onClick={nextStep} variant="primary" size="lg" className="mt-3 w-100 fw-bold">
-                Continue to Aadhaar Upload ➔
+                Continue to Document Upload ➔
               </Button>
             </Form>
           </Card.Body>
         </Card>
       )}
 
-      {/* STEP 2: Aadhaar Upload */}
+      {/* STEP 2: Unified Document Upload (Aadhaar & PAN) */}
       {step === 2 && (
         <Card className="border-0 shadow-sm">
           <Card.Header className="bg-white border-bottom py-3">
-            <h5 className="fw-bold mb-0 text-dark">Step 2: Upload Aadhaar Card</h5>
+            <h5 className="fw-bold mb-0 text-dark">Step 2: Upload Identity Documents</h5>
           </Card.Header>
-          <Card.Body className="p-4 text-center">
-            {error && <Alert variant="danger" className="mb-3 text-start">{error}</Alert>}
+          <Card.Body className="p-4">
+            {error && <Alert variant="danger" className="mb-3">{error}</Alert>}
             
-            <div className="p-4 border border-2 border-dashed rounded bg-light mb-3">
-              <span className="fs-1 d-block mb-2">📄</span>
-              <h6 className="fw-bold text-dark mb-1">Select High-Resolution Aadhaar Card Image</h6>
-              <p className="text-muted small mb-3">Supported Formats: JPEG, PNG, WEBP (Max 10MB)</p>
-              <Form.Control
-                type="file"
-                name="aadhaarFile"
-                accept="image/*"
-                onChange={handleFileChange}
-                className="w-75 mx-auto"
-              />
-            </div>
+            <Row className="g-3">
+              {/* Aadhaar Upload Box */}
+              <Col md={6}>
+                <div className="p-3 border border-2 border-dashed rounded bg-light text-center h-100 d-flex flex-column justify-content-between">
+                  <div>
+                    <span className="fs-2 d-block mb-1">📄</span>
+                    <h6 className="fw-bold text-dark mb-1">Aadhaar Card Image</h6>
+                    <p className="text-muted small mb-2">Upload Front Side of Aadhaar Card</p>
+                  </div>
+                  <div>
+                    <Form.Control
+                      type="file"
+                      name="aadhaarFile"
+                      accept="image/*"
+                      onChange={handleFileChange}
+                      className="mb-2"
+                    />
+                    {files.aadhaarFile && (
+                      <Badge bg="success" className="p-2 w-100 text-truncate">
+                        ✓ {files.aadhaarFile.name} ({(files.aadhaarFile.size / 1024).toFixed(1)} KB)
+                      </Badge>
+                    )}
+                  </div>
+                </div>
+              </Col>
 
-            {files.aadhaarFile && (
-              <Alert variant="success" className="py-2 px-3 d-inline-block text-start small">
-                ✓ Aadhaar File Selected: <strong>{files.aadhaarFile.name}</strong> ({(files.aadhaarFile.size / 1024).toFixed(1)} KB)
-              </Alert>
-            )}
-
-            <div className="d-flex justify-content-between mt-4">
-              <Button onClick={prevStep} variant="outline-secondary" size="lg">
-                ← Back
-              </Button>
-              <Button onClick={nextStep} variant="primary" size="lg" className="fw-bold">
-                Continue to PAN Upload ➔
-              </Button>
-            </div>
-          </Card.Body>
-        </Card>
-      )}
-
-      {/* STEP 3: PAN Upload */}
-      {step === 3 && (
-        <Card className="border-0 shadow-sm">
-          <Card.Header className="bg-white border-bottom py-3">
-            <h5 className="fw-bold mb-0 text-dark">Step 3: Upload PAN Card</h5>
-          </Card.Header>
-          <Card.Body className="p-4 text-center">
-            {error && <Alert variant="danger" className="mb-3 text-start">{error}</Alert>}
-            
-            <div className="p-4 border border-2 border-dashed rounded bg-light mb-3">
-              <span className="fs-1 d-block mb-2">💳</span>
-              <h6 className="fw-bold text-dark mb-1">Select High-Resolution PAN Card Image</h6>
-              <p className="text-muted small mb-3">Supported Formats: JPEG, PNG, WEBP (Max 10MB)</p>
-              <Form.Control
-                type="file"
-                name="panFile"
-                accept="image/*"
-                onChange={handleFileChange}
-                className="w-75 mx-auto"
-              />
-            </div>
-
-            {files.panFile && (
-              <Alert variant="success" className="py-2 px-3 d-inline-block text-start small">
-                ✓ PAN File Selected: <strong>{files.panFile.name}</strong> ({(files.panFile.size / 1024).toFixed(1)} KB)
-              </Alert>
-            )}
+              {/* PAN Upload Box */}
+              <Col md={6}>
+                <div className="p-3 border border-2 border-dashed rounded bg-light text-center h-100 d-flex flex-column justify-content-between">
+                  <div>
+                    <span className="fs-2 d-block mb-1">💳</span>
+                    <h6 className="fw-bold text-dark mb-1">PAN Card Image</h6>
+                    <p className="text-muted small mb-2">Upload Front Side of PAN Card</p>
+                  </div>
+                  <div>
+                    <Form.Control
+                      type="file"
+                      name="panFile"
+                      accept="image/*"
+                      onChange={handleFileChange}
+                      className="mb-2"
+                    />
+                    {files.panFile && (
+                      <Badge bg="success" className="p-2 w-100 text-truncate">
+                        ✓ {files.panFile.name} ({(files.panFile.size / 1024).toFixed(1)} KB)
+                      </Badge>
+                    )}
+                  </div>
+                </div>
+              </Col>
+            </Row>
 
             <div className="d-flex justify-content-between mt-4">
               <Button onClick={prevStep} variant="outline-secondary" size="lg">
@@ -340,8 +327,8 @@ const KycStepupForm = () => {
         </Card>
       )}
 
-      {/* STEP 4: Live Camera & Guided Verification Workspace */}
-      {step === 4 && (
+      {/* STEP 3: Live Camera & Guided Verification Workspace */}
+      {step === 3 && (
         <div>
           {error && <Alert variant="danger" className="mb-3">{error}</Alert>}
           <GuidedCameraWorkspace
@@ -350,19 +337,19 @@ const KycStepupForm = () => {
           />
           <div className="text-start mt-2">
             <Button onClick={prevStep} variant="outline-secondary" size="sm">
-              ← Back to PAN Upload
+              ← Back to Document Upload
             </Button>
           </div>
         </div>
       )}
 
-      {/* STEP 5: AI Verification Pipeline Execution (Camera Stream Destroyed) */}
-      {step === 5 && isProcessing && (
+      {/* STEP 4: AI Verification Pipeline Execution (Camera Stream Destroyed) */}
+      {step === 4 && isProcessing && (
         <PipelineProgress capturedBestFrame={capturedBestFrame} />
       )}
 
-      {/* STEP 6: Complete Verification Result & Action Controls */}
-      {step === 6 && verificationResult && (
+      {/* STEP 5: Complete Verification Result & Action Controls */}
+      {step === 5 && verificationResult && (
         <div>
           <VerificationResult data={verificationResult} />
           
