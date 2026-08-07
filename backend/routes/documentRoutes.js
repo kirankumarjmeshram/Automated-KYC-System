@@ -31,6 +31,7 @@ router.post(
   ]),
   async (req, res) => {
     const traceId = req.traceId;
+    const sessionId = req.headers["x-session-id"] || req.body.sessionId || req.headers["x-verification-session-id"] || null;
     const requestStart = Date.now();
     const timeline = [];
 
@@ -40,8 +41,8 @@ router.post(
 
     try {
       addTimelineStep(VerificationStatus.UPLOADED);
-      logOcrStep({ traceId, stage: "DOCUMENT_RECEIVED", message: `Form submission received: Name="${req.body.name || ""}"` });
-      logAudit({ traceId, oldStatus: null, newStatus: VerificationStatus.UPLOADED, event: "UPLOAD_RECEIVED" });
+      logOcrStep({ traceId, stage: "DOCUMENT_RECEIVED", message: `Form submission received: Name="${req.body.name || ""}" SessionID="${sessionId || "N/A"}"` });
+      logAudit({ traceId, sessionId, oldStatus: null, newStatus: VerificationStatus.UPLOADED, event: "UPLOAD_RECEIVED" });
 
       if (!req.body.name || (!req.body.aadhaar && !req.body.pan)) {
         addTimelineStep(VerificationStatus.REJECTED);

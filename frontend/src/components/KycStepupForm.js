@@ -3,11 +3,15 @@ import { Container, Form, Button, Card, Alert, ProgressBar } from "react-bootstr
 import axios from "axios";
 import VerificationResult from "./VerificationResult";
 import { generateTraceId, logger } from "../utils/logger";
+import CameraDeviceManager from "./live/CameraDeviceManager";
+import { getOrCreateSessionId } from "../utils/sessionManager";
 
 const KycStepupForm = () => {
   const [step, setStep] = useState(1);
   const [formData, setFormData] = useState({ name: "", aadhaar: "", pan: "" });
   const [files, setFiles] = useState({ aadhaarFile: null, panFile: null, selfieFile: null });
+  const [liveSnapshot, setLiveSnapshot] = useState(null);
+  const [showCamera, setShowCamera] = useState(false);
   const [verificationResult, setVerificationResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -18,6 +22,24 @@ const KycStepupForm = () => {
 
   const handleFileChange = (e) => {
     setFiles({ ...files, [e.target.name]: e.target.files[0] });
+  };
+
+  // Convert base64 data URL to File object
+  const dataURLtoFile = (dataurl, filename) => {
+    let arr = dataurl.split(','), mime = arr[0].match(/:(.*?);/)[1],
+        bstr = atob(arr[1]), n = bstr.length, u8arr = new Uint8Array(n);
+    while(n--){
+        u8arr[n] = bstr.charCodeAt(n);
+    }
+    return new File([u8arr], filename, {type:mime});
+  };
+
+  const handleLiveCapture = (imageSrc) => {
+    if (imageSrc) {
+      setLiveSnapshot(imageSrc);
+      const capturedFile = dataURLtoFile(imageSrc, `live_selfie_${Date.now()}.jpg`);
+      setFiles((prev) => ({ ...prev, selfieFile: capturedFile }));
+    }
   };
 
   const nextStep = () => setStep(step + 1);
@@ -36,8 +58,9 @@ const KycStepupForm = () => {
     }
 
     const traceId = generateTraceId();
+    const sessionId = getOrCreateSessionId();
     const startTime = Date.now();
-    logger.info("KYC Verification submission started", { traceId, name: formData.name });
+    logger.info("KYC Verification submission started", { traceId, sessionId, name: formData.name });
 
     const formDataObj = new FormData();
     formDataObj.append("name", formData.name.trim());
@@ -52,7 +75,7 @@ const KycStepupForm = () => {
     const localPreviews = {
       aadhaar: files.aadhaarFile ? URL.createObjectURL(files.aadhaarFile) : null,
       pan: files.panFile ? URL.createObjectURL(files.panFile) : null,
-      selfie: files.selfieFile ? URL.createObjectURL(files.selfieFile) : null,
+      selfie: liveSnapshot || (files.selfieFile ? URL.createObjectURL(files.selfieFile) : null),
     };
 
     try {
@@ -153,8 +176,30 @@ const KycStepupForm = () => {
               </Form.Group>
 
               <Form.Group className="mb-3">
-                <Form.Label className="fw-bold">Upload Selfie Photo <span className="text-muted fw-normal">(Optional for Face Matching)</span></Form.Label>
-                <Form.Control type="file" name="selfieFile" accept="image/*" onChange={handleFileChange} />
+                <div className="d-flex justify-content-between align-items-center mb-1">
+                  <Form.Label className="fw-bold mb-0">Selfie Photo / Live Camera Capture</Form.Label>
+                  <Button
+                    variant={showCamera ? "outline-secondary" : "outline-primary"}
+                    size="sm"
+                    onClick={() => setShowCamera(!showCamera)}
+                  >
+                    {showCamera ? "📁 Switch to File Upload" : "📷 Open Live Camera"}
+                  </Button>
+                </div>
+
+                {showCamera ? (
+                  <div className="mt-2">
+                    <CameraDeviceManager onCapture={handleLiveCapture} />
+                    {liveSnapshot && (
+                      <div className="text-center mt-2 p-2 border rounded bg-light">
+                        <small className="fw-bold text-success d-block mb-1">✓ Live Snapshot Captured!</small>
+                        <img src={liveSnapshot} alt="Live Snapshot" style={{ maxHeight: "120px" }} className="rounded shadow-sm" />
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <Form.Control type="file" name="selfieFile" accept="image/*" onChange={handleFileChange} />
+                )}
               </Form.Group>
 
               {error && <Alert variant="danger" className="mt-3">{error}</Alert>}
