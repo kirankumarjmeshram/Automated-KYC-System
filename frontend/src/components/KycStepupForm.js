@@ -1,19 +1,27 @@
 import React, { useState } from "react";
-import { Container, Form, Button, Card, Alert, ProgressBar } from "react-bootstrap";
+import { Container, Form, Button, Card, Alert, Row, Col, Badge } from "react-bootstrap";
 import axios from "axios";
 import VerificationResult from "./VerificationResult";
+import GuidedCameraWorkspace from "./live/GuidedCameraWorkspace";
+import PipelineProgress from "./live/PipelineProgress";
 import { generateTraceId, logger } from "../utils/logger";
-import CameraDeviceManager from "./live/CameraDeviceManager";
-import { getOrCreateSessionId } from "../utils/sessionManager";
+import { getOrCreateSessionId, resetSessionId } from "../utils/sessionManager";
 
+/**
+ * Production KYC Customer Verification Wizard Component
+ * Implements clean 8-step enterprise state machine:
+ * Step 1: Name & ID Numbers -> Step 2: Aadhaar Card -> Step 3: PAN Card -> Step 4: Camera Ready
+ * -> Step 5: Guided Recording -> Step 6: Stream Closed -> Step 7: Animated AI Pipeline -> Step 8: Verification Results
+ */
 const KycStepupForm = () => {
   const [step, setStep] = useState(1);
   const [formData, setFormData] = useState({ name: "", aadhaar: "", pan: "" });
   const [files, setFiles] = useState({ aadhaarFile: null, panFile: null, selfieFile: null });
-  const [liveSnapshot, setLiveSnapshot] = useState(null);
-  const [showCamera, setShowCamera] = useState(false);
+  const [capturedBestFrame, setCapturedBestFrame] = useState(null);
+  
+  // State Machine Flags
+  const [isProcessing, setIsProcessing] = useState(false);
   const [verificationResult, setVerificationResult] = useState(null);
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
   const handleChange = (e) => {
@@ -24,7 +32,7 @@ const KycStepupForm = () => {
     setFiles({ ...files, [e.target.name]: e.target.files[0] });
   };
 
-  // Convert base64 data URL to File object
+  // Convert Base64 Snapshot to JPEG File
   const dataURLtoFile = (dataurl, filename) => {
     let arr = dataurl.split(','), mime = arr[0].match(/:(.*?);/)[1],
         bstr = atob(arr[1]), n = bstr.length, u8arr = new Uint8Array(n);
@@ -34,33 +42,58 @@ const KycStepupForm = () => {
     return new File([u8arr], filename, {type:mime});
   };
 
-  const handleLiveCapture = (imageSrc) => {
-    if (imageSrc) {
-      setLiveSnapshot(imageSrc);
-      const capturedFile = dataURLtoFile(imageSrc, `live_selfie_${Date.now()}.jpg`);
-      setFiles((prev) => ({ ...prev, selfieFile: capturedFile }));
+  // Step Navigation
+  const nextStep = () => {
+    setError("");
+    if (step === 1) {
+      if (!formData.name || (!formData.aadhaar && !formData.pan)) {
+        setError("Please enter your Full Name and at least one ID Number.");
+        return;
+      }
+    } else if (step === 2) {
+      if (!files.aadhaarFile) {
+        setError("Please upload your Aadhaar Card document image.");
+        return;
+      }
+    } else if (step === 3) {
+      if (!files.panFile) {
+        setError("Please upload your PAN Card document image.");
+        return;
+      }
     }
+    setStep((prev) => prev + 1);
   };
 
-  const nextStep = () => setStep(step + 1);
-  const prevStep = () => setStep(step - 1);
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
+  const prevStep = () => {
     setError("");
-    setVerificationResult(null);
-    setLoading(true);
+    setStep((prev) => prev - 1);
+  };
 
-    if (!files.aadhaarFile || !files.panFile) {
-      setError("Please upload both Aadhaar and PAN files.");
-      setLoading(false);
-      return;
+  // Handle Guided Live Capture Completion
+  const handleRecordingComplete = async ({ bestFrame, frameCount }) => {
+    console.log(`[KycStepupForm] Guided Recording Complete. ${frameCount} frames collected.`);
+    setCapturedBestFrame(bestFrame);
+    
+    // Create selfie file from best frame snapshot
+    let selfieFileObj = files.selfieFile;
+    if (bestFrame) {
+      selfieFileObj = dataURLtoFile(bestFrame, `live_best_frame_${Date.now()}.jpg`);
     }
 
+    // Move to Step 5: AI Pipeline Execution (Camera Stream Destroyed & Released)
+    setStep(5);
+    setIsProcessing(true);
+    executeBackendVerification(selfieFileObj, bestFrame);
+  };
+
+  // Execute Backend API Verification
+  const executeBackendVerification = async (selfieFileObj, bestFrameSrc) => {
+    setError("");
     const traceId = generateTraceId();
     const sessionId = getOrCreateSessionId();
     const startTime = Date.now();
-    logger.info("KYC Verification submission started", { traceId, sessionId, name: formData.name });
+
+    logger.info("Enterprise KYC Verification API submission started", { traceId, sessionId, name: formData.name });
 
     const formDataObj = new FormData();
     formDataObj.append("name", formData.name.trim());
@@ -68,14 +101,14 @@ const KycStepupForm = () => {
     formDataObj.append("pan", formData.pan.trim());
     formDataObj.append("aadhaarFile", files.aadhaarFile);
     formDataObj.append("panFile", files.panFile);
-    if (files.selfieFile) {
-      formDataObj.append("selfieFile", files.selfieFile);
+    if (selfieFileObj) {
+      formDataObj.append("selfieFile", selfieFileObj);
     }
 
     const localPreviews = {
       aadhaar: files.aadhaarFile ? URL.createObjectURL(files.aadhaarFile) : null,
       pan: files.panFile ? URL.createObjectURL(files.panFile) : null,
-      selfie: liveSnapshot || (files.selfieFile ? URL.createObjectURL(files.selfieFile) : null),
+      selfie: bestFrameSrc || (files.selfieFile ? URL.createObjectURL(files.selfieFile) : null),
     };
 
     try {
@@ -83,6 +116,7 @@ const KycStepupForm = () => {
         headers: {
           "Accept": "application/json",
           "x-trace-id": traceId,
+          "x-session-id": sessionId,
         },
       });
 
@@ -94,9 +128,17 @@ const KycStepupForm = () => {
         duration: `${duration}ms`,
       });
 
-      setVerificationResult({ ...response.data, _uploadedPreviews: localPreviews });
+      // Artificial small delay to allow animated pipeline progress bar to reach 100%
+      setTimeout(() => {
+        setIsProcessing(false);
+        setVerificationResult({ ...response.data, _uploadedPreviews: localPreviews });
+        setStep(6); // Step 6: Verification Result Screen
+      }, 1200);
+
     } catch (err) {
       const duration = Date.now() - startTime;
+      setIsProcessing(false);
+      
       if (err.response && err.response.data) {
         logger.warn("KYC Verification failed with API response", {
           traceId: err.response.data.traceId || traceId,
@@ -105,126 +147,240 @@ const KycStepupForm = () => {
           duration: `${duration}ms`,
         });
         setVerificationResult({ ...err.response.data, _uploadedPreviews: localPreviews });
+        setStep(6);
       } else {
         logger.error("Network or unexpected server error", { traceId, error: err.message, duration: `${duration}ms` });
         setError("Network error. Could not connect to verification server.");
+        setStep(4); // Fallback back to camera step
       }
     }
-    setLoading(false);
+  };
+
+  // Reset Complete Session to Start New Customer Verification
+  const handleResetSession = () => {
+    resetSessionId();
+    setStep(1);
+    setFormData({ name: "", aadhaar: "", pan: "" });
+    setFiles({ aadhaarFile: null, panFile: null, selfieFile: null });
+    setCapturedBestFrame(null);
+    setVerificationResult(null);
+    setIsProcessing(false);
+    setError("");
   };
 
   return (
-    <Container className="mt-4">
-      <Card className="shadow-sm border-0">
-        <Card.Body>
-          <h2 className="text-center fw-bold mb-4">KYC Verification</h2>
+    <Container className="my-4" style={{ maxWidth: "850px" }}>
+      {/* Header Banner */}
+      <div className="text-center mb-4">
+        <Badge bg="primary" className="px-3 py-2 mb-2 rounded-pill shadow-sm fs-6">
+          🔒 Enterprise CKYC & DigiLocker Gateway
+        </Badge>
+        <h2 className="fw-bold text-dark mb-1">Automated Identity Verification</h2>
+        <p className="text-muted small">Fast, Secure AI-Powered Document OCR & Live Facial Biometrics</p>
+      </div>
 
-          {step === 1 && (
+      {/* Step Wizard Progress Bar */}
+      {step <= 4 && (
+        <Card className="border-0 shadow-sm mb-4">
+          <Card.Body className="p-3">
+            <div className="d-flex justify-content-between align-items-center mb-2">
+              <span className={`small fw-bold ${step >= 1 ? "text-primary" : "text-muted"}`}>1. Applicant Details</span>
+              <span className={`small fw-bold ${step >= 2 ? "text-primary" : "text-muted"}`}>2. Aadhaar Upload</span>
+              <span className={`small fw-bold ${step >= 3 ? "text-primary" : "text-muted"}`}>3. PAN Upload</span>
+              <span className={`small fw-bold ${step >= 4 ? "text-primary" : "text-muted"}`}>4. Live Facial Verification</span>
+            </div>
+            <div className="progress" style={{ height: "6px" }}>
+              <div
+                className="progress-bar bg-primary progress-bar-striped progress-bar-animated"
+                style={{ width: `${(step / 4) * 100}%` }}
+              />
+            </div>
+          </Card.Body>
+        </Card>
+      )}
+
+      {/* STEP 1: Applicant Details */}
+      {step === 1 && (
+        <Card className="border-0 shadow-sm">
+          <Card.Header className="bg-white border-bottom py-3">
+            <h5 className="fw-bold mb-0 text-dark">Step 1: Enter Customer Information</h5>
+          </Card.Header>
+          <Card.Body className="p-4">
+            {error && <Alert variant="danger" className="mb-3">{error}</Alert>}
             <Form>
               <Form.Group className="mb-3">
-                <Form.Label className="fw-bold">Full Name</Form.Label>
+                <Form.Label className="fw-bold">Full Name (as printed on ID)</Form.Label>
                 <Form.Control
                   type="text"
                   name="name"
                   value={formData.name}
                   onChange={handleChange}
-                  placeholder="Enter full name as on documents"
+                  placeholder="e.g. KIRANKUMAR JAGESHWAR MESHRAM"
+                  size="lg"
                   required
                 />
               </Form.Group>
 
-              <Form.Group className="mb-3">
-                <Form.Label className="fw-bold">Aadhaar Number</Form.Label>
-                <Form.Control
-                  type="text"
-                  name="aadhaar"
-                  value={formData.aadhaar}
-                  onChange={handleChange}
-                  placeholder="12-digit Aadhaar Number"
-                  required
-                />
-              </Form.Group>
+              <Row>
+                <Col md={6}>
+                  <Form.Group className="mb-3">
+                    <Form.Label className="fw-bold">Aadhaar Number</Form.Label>
+                    <Form.Control
+                      type="text"
+                      name="aadhaar"
+                      value={formData.aadhaar}
+                      onChange={handleChange}
+                      placeholder="12-digit Aadhaar Number"
+                      maxLength={14}
+                      required
+                    />
+                  </Form.Group>
+                </Col>
+                <Col md={6}>
+                  <Form.Group className="mb-3">
+                    <Form.Label className="fw-bold">PAN Number</Form.Label>
+                    <Form.Control
+                      type="text"
+                      name="pan"
+                      value={formData.pan}
+                      onChange={handleChange}
+                      placeholder="10-character PAN Number"
+                      maxLength={10}
+                      required
+                    />
+                  </Form.Group>
+                </Col>
+              </Row>
 
-              <Form.Group className="mb-3">
-                <Form.Label className="fw-bold">PAN Number</Form.Label>
-                <Form.Control
-                  type="text"
-                  name="pan"
-                  value={formData.pan}
-                  onChange={handleChange}
-                  placeholder="10-character PAN Number"
-                  required
-                />
-              </Form.Group>
-
-              <Button onClick={nextStep} variant="primary" className="mt-2 w-100">
-                Next
+              <Button onClick={nextStep} variant="primary" size="lg" className="mt-3 w-100 fw-bold">
+                Continue to Aadhaar Upload ➔
               </Button>
             </Form>
-          )}
+          </Card.Body>
+        </Card>
+      )}
 
-          {step === 2 && (
-            <Form onSubmit={handleSubmit} encType="multipart/form-data">
-              <Form.Group className="mb-3">
-                <Form.Label className="fw-bold">Upload Aadhaar Card Image</Form.Label>
-                <Form.Control type="file" name="aadhaarFile" onChange={handleFileChange} required />
-              </Form.Group>
+      {/* STEP 2: Aadhaar Upload */}
+      {step === 2 && (
+        <Card className="border-0 shadow-sm">
+          <Card.Header className="bg-white border-bottom py-3">
+            <h5 className="fw-bold mb-0 text-dark">Step 2: Upload Aadhaar Card</h5>
+          </Card.Header>
+          <Card.Body className="p-4 text-center">
+            {error && <Alert variant="danger" className="mb-3 text-start">{error}</Alert>}
+            
+            <div className="p-4 border border-2 border-dashed rounded bg-light mb-3">
+              <span className="fs-1 d-block mb-2">📄</span>
+              <h6 className="fw-bold text-dark mb-1">Select High-Resolution Aadhaar Card Image</h6>
+              <p className="text-muted small mb-3">Supported Formats: JPEG, PNG, WEBP (Max 10MB)</p>
+              <Form.Control
+                type="file"
+                name="aadhaarFile"
+                accept="image/*"
+                onChange={handleFileChange}
+                className="w-75 mx-auto"
+              />
+            </div>
 
-              <Form.Group className="mb-3">
-                <Form.Label className="fw-bold">Upload PAN Card Image</Form.Label>
-                <Form.Control type="file" name="panFile" onChange={handleFileChange} required />
-              </Form.Group>
+            {files.aadhaarFile && (
+              <Alert variant="success" className="py-2 px-3 d-inline-block text-start small">
+                ✓ Aadhaar File Selected: <strong>{files.aadhaarFile.name}</strong> ({(files.aadhaarFile.size / 1024).toFixed(1)} KB)
+              </Alert>
+            )}
 
-              <Form.Group className="mb-3">
-                <div className="d-flex justify-content-between align-items-center mb-1">
-                  <Form.Label className="fw-bold mb-0">Selfie Photo / Live Camera Capture</Form.Label>
-                  <Button
-                    variant={showCamera ? "outline-secondary" : "outline-primary"}
-                    size="sm"
-                    onClick={() => setShowCamera(!showCamera)}
-                  >
-                    {showCamera ? "📁 Switch to File Upload" : "📷 Open Live Camera"}
-                  </Button>
-                </div>
+            <div className="d-flex justify-content-between mt-4">
+              <Button onClick={prevStep} variant="outline-secondary" size="lg">
+                ← Back
+              </Button>
+              <Button onClick={nextStep} variant="primary" size="lg" className="fw-bold">
+                Continue to PAN Upload ➔
+              </Button>
+            </div>
+          </Card.Body>
+        </Card>
+      )}
 
-                {showCamera ? (
-                  <div className="mt-2">
-                    <CameraDeviceManager onCapture={handleLiveCapture} />
-                    {liveSnapshot && (
-                      <div className="text-center mt-2 p-2 border rounded bg-light">
-                        <small className="fw-bold text-success d-block mb-1">✓ Live Snapshot Captured!</small>
-                        <img src={liveSnapshot} alt="Live Snapshot" style={{ maxHeight: "120px" }} className="rounded shadow-sm" />
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <Form.Control type="file" name="selfieFile" accept="image/*" onChange={handleFileChange} />
-                )}
-              </Form.Group>
+      {/* STEP 3: PAN Upload */}
+      {step === 3 && (
+        <Card className="border-0 shadow-sm">
+          <Card.Header className="bg-white border-bottom py-3">
+            <h5 className="fw-bold mb-0 text-dark">Step 3: Upload PAN Card</h5>
+          </Card.Header>
+          <Card.Body className="p-4 text-center">
+            {error && <Alert variant="danger" className="mb-3 text-start">{error}</Alert>}
+            
+            <div className="p-4 border border-2 border-dashed rounded bg-light mb-3">
+              <span className="fs-1 d-block mb-2">💳</span>
+              <h6 className="fw-bold text-dark mb-1">Select High-Resolution PAN Card Image</h6>
+              <p className="text-muted small mb-3">Supported Formats: JPEG, PNG, WEBP (Max 10MB)</p>
+              <Form.Control
+                type="file"
+                name="panFile"
+                accept="image/*"
+                onChange={handleFileChange}
+                className="w-75 mx-auto"
+              />
+            </div>
 
-              {error && <Alert variant="danger" className="mt-3">{error}</Alert>}
+            {files.panFile && (
+              <Alert variant="success" className="py-2 px-3 d-inline-block text-start small">
+                ✓ PAN File Selected: <strong>{files.panFile.name}</strong> ({(files.panFile.size / 1024).toFixed(1)} KB)
+              </Alert>
+            )}
 
-              <div className="d-flex justify-content-between mt-4">
-                <Button onClick={prevStep} variant="outline-secondary">
-                  Back
+            <div className="d-flex justify-content-between mt-4">
+              <Button onClick={prevStep} variant="outline-secondary" size="lg">
+                ← Back
+              </Button>
+              <Button onClick={nextStep} variant="primary" size="lg" className="fw-bold">
+                Proceed to Live Facial Verification ➔
+              </Button>
+            </div>
+          </Card.Body>
+        </Card>
+      )}
+
+      {/* STEP 4: Live Camera & Guided Verification Workspace */}
+      {step === 4 && (
+        <div>
+          {error && <Alert variant="danger" className="mb-3">{error}</Alert>}
+          <GuidedCameraWorkspace
+            onRecordingComplete={handleRecordingComplete}
+            onError={(msg) => setError(msg)}
+          />
+          <div className="text-start mt-2">
+            <Button onClick={prevStep} variant="outline-secondary" size="sm">
+              ← Back to PAN Upload
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* STEP 5: AI Verification Pipeline Execution (Camera Stream Destroyed) */}
+      {step === 5 && isProcessing && (
+        <PipelineProgress capturedBestFrame={capturedBestFrame} />
+      )}
+
+      {/* STEP 6: Complete Verification Result & Action Controls */}
+      {step === 6 && verificationResult && (
+        <div>
+          <VerificationResult data={verificationResult} />
+          
+          <Card className="border-0 shadow-sm mt-4 mb-4">
+            <Card.Body className="p-3 d-flex flex-wrap justify-content-between align-items-center gap-2">
+              <span className="text-muted small fw-bold">Verification Complete</span>
+              <div className="d-flex gap-2">
+                <Button variant="primary" onClick={handleResetSession}>
+                  🔄 Verify Another Customer
                 </Button>
-                <Button type="submit" variant="success" disabled={loading}>
-                  {loading ? "Processing..." : "Submit Verification"}
+                <Button variant="outline-secondary" onClick={() => window.print()}>
+                  📥 Download Compliance Report
                 </Button>
               </div>
-            </Form>
-          )}
-
-          {loading && (
-            <div className="mt-4 text-center">
-              <p className="text-muted fw-bold">Processing documents with AI engine...</p>
-              <ProgressBar animated now={100} variant="info" />
-            </div>
-          )}
-
-          {verificationResult && <VerificationResult data={verificationResult} />}
-        </Card.Body>
-      </Card>
+            </Card.Body>
+          </Card>
+        </div>
+      )}
     </Container>
   );
 };
